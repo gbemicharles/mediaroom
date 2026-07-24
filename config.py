@@ -19,6 +19,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 # Anthropic API Key (for Text generation via Claude)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
+# OpenRouter API Key (for Text generation via OpenRouter - routes to Claude, GPT-4o, etc.)
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
 # Channel Bedtime Story Introduction
 CHANNEL_INTRODUCTION = (
     "I invite you to a new bedtime story for relaxation and sleep. Get comfortable, relax, and "
@@ -203,8 +206,8 @@ def check_env_vars():
     if missing:
         raise ValueError(f"Missing critical environment variable: {', '.join(missing)}. You MUST provide a Telegram Bot Token to start the bot.")
         
-    if not ANTHROPIC_API_KEY and not GEMINI_API_KEY and not OPENAI_API_KEY:
-        print("WARNING: No text generation API key found (ANTHROPIC_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY). Text generation will run in MOCK MODE.")
+    if not OPENROUTER_API_KEY and not ANTHROPIC_API_KEY and not GEMINI_API_KEY and not OPENAI_API_KEY:
+        print("WARNING: No text generation API key found (OPENROUTER_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY). Text generation will run in MOCK MODE.")
 
     if not REPLICATE_API_TOKEN:
         print("WARNING: REPLICATE_API_TOKEN is missing. Thumbnail and video generation will run in MOCK MODE.")

@@ -3,9 +3,14 @@ import replicate
 import anthropic
 from openai import OpenAI
 import google.generativeai as genai
-from config import ANTHROPIC_API_KEY, OPENAI_API_KEY, REPLICATE_API_TOKEN, GEMINI_API_KEY, CHANNEL_INTRODUCTION
+from config import OPENROUTER_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, REPLICATE_API_TOKEN, GEMINI_API_KEY, CHANNEL_INTRODUCTION
 
 # Initialize clients safely
+# OpenRouter uses the OpenAI SDK format with a different base URL
+openrouter_client = OpenAI(
+    api_key=OPENROUTER_API_KEY,
+    base_url="https://openrouter.ai/api/v1",
+) if OPENROUTER_API_KEY else None
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 # Replicate automatically picks up REPLICATE_API_TOKEN from env vars
@@ -96,7 +101,17 @@ def generate_text_and_extract_prompt(transcript: str, system_prompt: str, target
 
     full_text = ""
 
-    if anthropic_client:
+    if openrouter_client:
+        response = openrouter_client.chat.completions.create(
+            model="anthropic/claude-sonnet-4-5",
+            messages=[
+                {"role": "system", "content": system_prompt + lang_instruction},
+                {"role": "user", "content": f"Here is the transcript of the video:\n\n{transcript}"}
+            ],
+            temperature=0.7,
+        )
+        full_text = response.choices[0].message.content
+    elif anthropic_client:
         message = anthropic_client.messages.create(
             model="claude-sonnet-4-5",
             max_tokens=8096,
