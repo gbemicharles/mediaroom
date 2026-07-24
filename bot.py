@@ -154,13 +154,7 @@ def download_transcript_invidious(video_url: str) -> str:
 
     # Public Invidious instances to try in order
     instances = [
-        "https://inv.nadeko.net",
-        "https://invidious.nikkosphere.com",
-        "https://iv.melmac.space",
-        "https://invidious.privacydev.net",
-        "https://yt.artemislena.eu",
-        "https://invidious.perennialte.ch",
-        "https://invidious.io.lol",
+        "https://inv.nadeko.net",  # verified working 2026-07-24
     ]
 
     last_error = None
@@ -485,10 +479,11 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=chat_id,
                 text=(
                     "❌ Could not download transcript automatically.\n\n"
-                    "YouTube is blocking requests from this server's IP address.\n\n"
-                    "👉 What you can do:\n"
-                    "1. Copy & paste the script/transcript directly as a text message to this bot.\n"
-                    "2. Or upload a .txt file containing the script/transcript."
+                    "YouTube is rate-limiting requests right now (temporary — usually resets within 1-2 hours).\n\n"
+                    "👉 In the meantime:\n"
+                    "1. Copy & paste the transcript/script as a text message.\n"
+                    "2. Or upload a .txt file with the transcript.\n\n"
+                    "In normal use (a few videos per day) this error won't appear."
                 )
             )
             return
