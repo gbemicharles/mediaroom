@@ -219,7 +219,7 @@ def download_transcript_ytdlp(video_url: str) -> str:
         "--write-auto-subs",
         "--write-subs",
         "--skip-download",
-        "--sub-langs", "en.*",   # only grab English; avoids 429s from downloading many langs
+        "--sub-langs", "en.*,ro,es,fr,de,pt,it,zh,ja,ru,ar",  # grab English + common langs
         "-o", temp_template,
     ]
 
@@ -233,17 +233,16 @@ def download_transcript_ytdlp(video_url: str) -> str:
 
     cmd.append(video_url)
     
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    except subprocess.CalledProcessError as e:
-        error_msg = e.stderr or e.stdout or str(e)
-        raise Exception(f"yt-dlp failed to download subtitles: {error_msg}")
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    # Don't fail on non-zero exit — yt-dlp exits non-zero if even one subtitle
+    # variant gets a 429, even when other tracks downloaded successfully.
         
-    # Find downloaded subtitle files
+    # Find downloaded subtitle files (yt-dlp may exit non-zero but still write some files)
     pattern = os.path.join(os.getcwd(), f"temp_{unique_id}.*")
     downloaded_files = glob.glob(pattern)
     if not downloaded_files:
-        raise Exception("No subtitle files could be found. This video may not have subtitles available.")
+        error_msg = res.stderr or res.stdout or "No subtitle files downloaded"
+        raise Exception(f"yt-dlp failed to download subtitles: {error_msg}")
         
     vtt_file = downloaded_files[0]
     
