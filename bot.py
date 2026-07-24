@@ -91,6 +91,8 @@ def download_transcript_invidious(video_url: str) -> str:
         "https://iv.melmac.space",
         "https://invidious.privacydev.net",
         "https://yt.artemislena.eu",
+        "https://invidious.perennialte.ch",
+        "https://invidious.io.lol",
     ]
 
     last_error = None
@@ -98,7 +100,7 @@ def download_transcript_invidious(video_url: str) -> str:
         try:
             # Get list of available caption tracks
             captions_url = f"{instance}/api/v1/captions/{video_id}"
-            resp = req.get(captions_url, timeout=10)
+            resp = req.get(captions_url, timeout=5)
             resp.raise_for_status()
             data = resp.json()
 
@@ -389,15 +391,11 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     error_msg = (
                         "❌ Could not download transcript automatically.\n\n"
                         "YouTube is blocking requests from this server's IP address.\n\n"
-                        "👉 **What you can do:**\n"
+                        "👉 What you can do:\n"
                         "1. Copy & paste the script/transcript directly as a text message to this bot.\n"
-                        "2. Or upload a `.txt` file containing the script/transcript.\n\n"
-                        "Error details:\n"
-                        f"- {api_err}\n"
-                        f"- {invidious_err}\n"
-                        f"- {ytdlp_err}"
+                        "2. Or upload a .txt file containing the script/transcript."
                     )
-                    await context.bot.send_message(chat_id=chat_id, text=error_msg, parse_mode="Markdown")
+                    await context.bot.send_message(chat_id=chat_id, text=error_msg)
                     return
             
     # Combine caption context if transcript came from file
