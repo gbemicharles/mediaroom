@@ -4,7 +4,7 @@ import replicate
 import anthropic
 from openai import OpenAI
 import google.generativeai as genai
-from config import OPENROUTER_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, REPLICATE_API_TOKEN, GEMINI_API_KEY, CHANNEL_INTRODUCTION
+from config import OPENROUTER_API_KEY, ANTHROPIC_API_KEY, REPLICATE_API_TOKEN, GEMINI_API_KEY, CHANNEL_INTRODUCTION
 
 # Initialize clients safely
 # OpenRouter uses the OpenAI SDK format with a different base URL
@@ -13,7 +13,6 @@ openrouter_client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
 ) if OPENROUTER_API_KEY else None
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
-openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 # Replicate automatically picks up REPLICATE_API_TOKEN from env vars
 
 def split_transcript_into_chunks(text: str, max_chars: int = 10000) -> list[str]:
@@ -74,17 +73,6 @@ def translate_chunk(chunk: str, target_lang: str) -> str:
                 temperature=0.7,
             )
             return msg.content[0].text.strip()
-        elif openai_client:
-            resp = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                max_tokens=8192,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": chunk},
-                ],
-                temperature=0.7,
-            )
-            return resp.choices[0].message.content.strip()
     except Exception as e:
         logging.error(f"translate_chunk error: {e}")
         raise   # re-raise so the retry wrapper in bot.py can catch it
@@ -212,16 +200,6 @@ def generate_text_and_extract_prompt(transcript: str, system_prompt: str, target
             )
         )
         full_text = response.text
-    elif openai_client:
-        response = openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_prompt + lang_instruction},
-                {"role": "user", "content": f"Here is the transcript of the video:\n\n{transcript}"}
-            ],
-            temperature=0.7
-        )
-        full_text = response.choices[0].message.content
     else:
         if "Production Pack" in system_prompt or "premium media studio" in system_prompt:
             mock_prompt = "A cinematic Netflix-style documentary portrait of a Roman legionary standing in the rain, ultra realistic, cinematic lighting"
