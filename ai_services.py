@@ -111,6 +111,7 @@ def generate_text_and_extract_prompt(transcript: str, system_prompt: str, target
             temperature=0.7,
         )
         full_text = response.choices[0].message.content
+        logging.info(f"OpenRouter response length: {len(full_text)} chars, preview: {full_text[:100]!r}")
     elif anthropic_client:
         message = anthropic_client.messages.create(
             model="claude-sonnet-4-5",

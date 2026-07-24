@@ -306,13 +306,16 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
         prompt_to_use = user_prompts.get(user_id, DEFAULT_PROMPT)
         
         await context.bot.send_message(chat_id=chat_id, text=f"🧠 Translating transcript & generating assets in {target_lang}...")
-        
+        logging.info(f"STEP 1: Calling AI generation. Transcript length: {len(transcript_text)} chars")
+
         full_text, image_prompt, translated_transcript = await asyncio.to_thread(
             generate_text_and_extract_prompt, transcript_text, prompt_to_use, target_lang
         )
+        logging.info(f"STEP 2: AI done. full_text={len(full_text)} chars, image_prompt={bool(image_prompt)}, transcript={len(translated_transcript)} chars")
 
         # Send translated transcript as a file
         if translated_transcript:
+            logging.info("STEP 3: Sending translated transcript file")
             filename = f"transcript_{target_lang}.txt"
             filepath = os.path.join(os.getcwd(), filename)
             with open(filepath, "w", encoding="utf-8") as f:
@@ -333,21 +336,30 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
                     os.remove(filepath)
 
         # Send generated text assets
+        logging.info(f"STEP 4: Sending full_text ({len(full_text)} chars)")
+        if not full_text.strip():
+            await context.bot.send_message(chat_id=chat_id, text="⚠️ AI returned empty response. Please try again.")
+            return
         if len(full_text) > 4000:
             for i in range(0, len(full_text), 4000):
                 await context.bot.send_message(chat_id=chat_id, text=full_text[i:i+4000])
         else:
             await context.bot.send_message(chat_id=chat_id, text=full_text)
-            
+
+        logging.info(f"STEP 5: Checking image_prompt: '{image_prompt[:60] if image_prompt else None}'")
         if image_prompt and image_prompt != "A generic YouTube thumbnail":
             await context.bot.send_message(chat_id=chat_id, text=f"🎨 Generating thumbnail...\n`{image_prompt}`")
+            logging.info("STEP 6: Calling FLUX Schnell")
             image_url = await asyncio.to_thread(generate_thumbnail, image_prompt)
+            logging.info(f"STEP 7: Thumbnail done. URL: {image_url[:60] if image_url else 'EMPTY'}")
 
             if image_url:
                 await context.bot.send_photo(chat_id=chat_id, photo=image_url, caption="✅ Generated Thumbnail")
 
                 await context.bot.send_message(chat_id=chat_id, text="🎬 Generating intro video (~1 min)...")
+                logging.info("STEP 8: Calling SVD video generation")
                 video_url = await asyncio.to_thread(generate_intro_video, image_url)
+                logging.info(f"STEP 9: Video done. URL: {video_url[:60] if video_url else 'EMPTY'}")
 
                 if video_url:
                     await context.bot.send_video(chat_id=chat_id, video=video_url, caption="✅ Generated Intro Video")
@@ -357,9 +369,11 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
                 await context.bot.send_message(chat_id=chat_id, text="❌ Failed to generate thumbnail.")
         else:
             await context.bot.send_message(chat_id=chat_id, text="⚠️ Could not extract a thumbnail prompt from the AI's response.")
+        
+        logging.info("STEP 10: process_transcript complete")
             
     except Exception as e:
-        logging.error(f"Error in processing: {e}")
+        logging.error(f"Error in processing: {e}", exc_info=True)
         await context.bot.send_message(chat_id=chat_id, text=f"❌ An error occurred: {e}")
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
