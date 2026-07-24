@@ -369,40 +369,36 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
         chunks = split_transcript_into_chunks(transcript_text, max_chars=CHUNK_SIZE)
         total_chunks = len(chunks)
 
-        if total_chunks > 1:
-            await _send_html(
-                context.bot, chat_id,
-                f"🧠 <b>Generating production pack in {_html(target_lang)}…</b>\n"
-                f"<i>Transcript split into {total_chunks} parts — translating all of them. This may take a few minutes.</i>"
-            )
-        else:
-            await _send_html(
-                context.bot, chat_id,
-                f"🧠 <b>Generating production pack in {_html(target_lang)}…</b>\n"
-                f"<i>Translating transcript, writing scripts, building assets — hang tight.</i>"
-            )
-        logging.info(f"STEP 1: {total_chunks} chunk(s). Total chars: {len(transcript_text)}")
+        await _send_html(
+            context.bot, chat_id,
+            f"🧠 <b>Generating production pack in {_html(target_lang)}…</b>\n"
+            + (f"<i>Transcript split into {total_chunks} parts — all translating in parallel.</i>"
+               if total_chunks > 1 else
+               "<i>Translating transcript, writing scripts, building assets — hang tight.</i>")
+        )
+        logging.info(f"STEP 1: {total_chunks} chunk(s), {len(transcript_text)} total chars. Launching parallel tasks.")
 
-        # Chunk 1 → full production pack + translated first part
-        full_text, image_prompt, translated_part1 = await asyncio.to_thread(
+        # Fire everything simultaneously:
+        #   • production pack from chunk 0 (titles, SEO, scripts, etc.)
+        #   • translate_chunk for every chunk in parallel
+        pack_task = asyncio.to_thread(
             generate_text_and_extract_prompt, chunks[0], prompt_to_use, target_lang
         )
-        logging.info(f"STEP 2: Chunk 1 done. pack={len(full_text)} chars, transcript_part={len(translated_part1)} chars")
+        translate_tasks = [
+            asyncio.to_thread(translate_chunk, chunk, target_lang)
+            for chunk in chunks
+        ]
 
-        # Remaining chunks → translation only
-        translated_parts = [translated_part1] if translated_part1 else []
-        for idx, chunk in enumerate(chunks[1:], start=2):
-            await _send_html(
-                context.bot, chat_id,
-                f"🔄 <b>Translating part {idx}/{total_chunks}…</b>"
-            )
-            logging.info(f"STEP 2.{idx}: Translating chunk {idx}/{total_chunks} ({len(chunk)} chars)")
-            part = await asyncio.to_thread(translate_chunk, chunk, target_lang)
-            translated_parts.append(part)
-            logging.info(f"STEP 2.{idx}: Done ({len(part)} chars)")
+        results = await asyncio.gather(pack_task, *translate_tasks)
 
-        translated_transcript = "\n\n".join(translated_parts)
-        logging.info(f"STEP 3: Combined transcript: {len(translated_transcript)} chars across {len(translated_parts)} parts")
+        pack_result = results[0]
+        translated_parts = list(results[1:])   # one per chunk, in order
+
+        full_text, image_prompt, _ = pack_result   # discard pack's own translated_transcript
+        logging.info(f"STEP 2: pack={len(full_text)} chars, {len(translated_parts)} translated chunks")
+
+        translated_transcript = "\n\n".join(p for p in translated_parts if p.strip())
+        logging.info(f"STEP 3: Combined transcript: {len(translated_transcript)} chars")
 
         # ── Translated transcript .txt ───────────────────────────────────────
         if translated_transcript.strip():
