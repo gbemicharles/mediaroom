@@ -7,7 +7,7 @@ import glob
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from youtube_transcript_api import YouTubeTranscriptApi
-from config import check_env_vars, TELEGRAM_BOT_TOKEN, DEFAULT_PROMPT
+from config import check_env_vars, TELEGRAM_BOT_TOKEN, DEFAULT_PROMPT, get_proxy_url
 from ai_services import generate_text_and_extract_prompt, generate_thumbnail, generate_intro_video
 
 # Setup logging
@@ -58,13 +58,16 @@ def extract_video_id(url):
     return None
 
 def download_transcript_api(video_url: str) -> str:
-    """Downloads transcript using youtube-transcript-api."""
+    """Downloads transcript using youtube-transcript-api with Webshare proxy."""
     video_id = extract_video_id(video_url)
     if not video_id:
         raise Exception("Could not extract video ID from URL")
-        
-    api = YouTubeTranscriptApi()
+
+    proxy_url = get_proxy_url()
+    proxies = {"https": proxy_url, "http": proxy_url} if proxy_url else None
+
     try:
+        api = YouTubeTranscriptApi(proxies=proxies) if proxies else YouTubeTranscriptApi()
         transcript_list = api.list(video_id)
         langs = [t.language_code for t in transcript_list]
         if not langs:
@@ -141,19 +144,23 @@ def download_transcript_invidious(video_url: str) -> str:
 
 
 def download_transcript_ytdlp(video_url: str) -> str:
-    """Downloads transcript using yt-dlp, cleans it, and returns the text."""
+    """Downloads transcript using yt-dlp with Webshare proxy, cleans it, and returns the text."""
     unique_id = str(uuid.uuid4())
     temp_template = os.path.join(os.getcwd(), f"temp_{unique_id}.%(ext)s")
-    
-    # Run yt-dlp to download subtitles (downloads the native subtitle/captions)
+
     cmd = [
         "yt-dlp",
         "--write-auto-subs",
         "--write-subs",
         "--skip-download",
         "-o", temp_template,
-        video_url
     ]
+
+    proxy_url = get_proxy_url()
+    if proxy_url:
+        cmd += ["--proxy", proxy_url]
+
+    cmd.append(video_url)
     
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, check=True)

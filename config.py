@@ -22,6 +22,16 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 # OpenRouter API Key (for Text generation via OpenRouter - routes to Claude, GPT-4o, etc.)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
+# Webshare Proxy credentials (for bypassing YouTube IP blocks)
+WEBSHARE_PROXY_USERNAME = os.getenv("WEBSHARE_PROXY_USERNAME")
+WEBSHARE_PROXY_PASSWORD = os.getenv("WEBSHARE_PROXY_PASSWORD")
+
+def get_proxy_url():
+    """Returns the Webshare rotating proxy URL, or None if not configured."""
+    if WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD:
+        return f"http://{WEBSHARE_PROXY_USERNAME}:{WEBSHARE_PROXY_PASSWORD}@proxy.webshare.io:80"
+    return None
+
 # Channel Bedtime Story Introduction
 CHANNEL_INTRODUCTION = (
     "I invite you to a new bedtime story for relaxation and sleep. Get comfortable, relax, and "
