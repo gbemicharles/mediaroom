@@ -307,50 +307,59 @@ A close-up studio portrait of a 45-year-old male historian with short grey hair 
     return full_text, thumbnail_prompt, final_transcript
 
 def generate_thumbnail(image_prompt: str) -> str:
-    """Calls FLUX Schnell via Replicate to generate a thumbnail and returns the URL."""
+    """Calls FLUX 1.1 Pro via Replicate to generate a high-quality thumbnail and returns the URL."""
     if not REPLICATE_API_TOKEN:
         return "https://placehold.co/1280x720/png?text=Mock+Thumbnail"
 
     try:
         output = replicate.run(
-            "black-forest-labs/flux-schnell",
+            "black-forest-labs/flux-1.1-pro",
             input={
                 "prompt": image_prompt,
-                "num_outputs": 1,
                 "aspect_ratio": "16:9",
                 "output_format": "jpg",
-                "output_quality": 90,
-                "go_fast": True,
             }
         )
-        # Output is a list of URLs or FileOutput objects
         result = output[0] if isinstance(output, list) else output
         if hasattr(result, 'url'):
             return str(result.url)
         return str(result)
     except Exception as e:
-        print(f"Error generating thumbnail: {e}")
+        logging.error(f"Error generating thumbnail: {e}")
         return ""
 
-def generate_intro_video(image_url: str) -> str:
-    """Calls Replicate to generate a short intro video based on the thumbnail."""
+def generate_intro_video(image_url: str, image_prompt: str = "") -> str:
+    """Calls Wan 2.1 image-to-video via Replicate to generate a cinematic intro clip."""
     if not REPLICATE_API_TOKEN:
         return "https://www.w3schools.com/html/mov_bbb.mp4"
 
+    # Build a motion prompt from the image prompt, or fall back to a generic cinematic move
+    if image_prompt:
+        motion_prompt = (
+            f"{image_prompt}. "
+            "Slow cinematic camera pull-back, volumetric atmospheric fog drifting through the scene, "
+            "dramatic golden-hour lighting, ultra-realistic, documentary style."
+        )
+    else:
+        motion_prompt = (
+            "Slow cinematic camera pull-back, volumetric atmospheric fog drifting through the scene, "
+            "dramatic golden-hour lighting, ultra-realistic historical documentary style."
+        )
+
     try:
         output = replicate.run(
-            "stability-ai/stable-video-diffusion:3f0457e4619daac51203dedb472816fd4af51f3149fa7a9e0b5ffcf1b8172438",
+            "wavespeedai/wan-2.1-i2v-480p",
             input={
-                "cond_aug": 0.02,
-                "decoding_t": 7,
-                "input_image": image_url,
-                "video_length": "14_frames_with_svd_xt",
-                "sizing_strategy": "maintain_aspect_ratio",
-                "motion_bucket_id": 127,
-                "frames_per_second": 6
+                "image": image_url,
+                "prompt": motion_prompt,
+                "aspect_ratio": "16:9",
+                "fast_mode": "Balanced",
             }
         )
-        return output
+        result = output[0] if isinstance(output, list) else output
+        if hasattr(result, 'url'):
+            return str(result.url)
+        return str(result)
     except Exception as e:
-        print(f"Error generating intro video: {e}")
+        logging.error(f"Error generating intro video: {e}")
         return ""

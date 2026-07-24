@@ -493,8 +493,8 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
                 )
 
                 await _send_html(context.bot, chat_id, "🎬 <b>Generating intro video…</b> <i>(~30–60 s)</i>")
-                logging.info("STEP 8: Calling SVD video generation")
-                video_url = await asyncio.to_thread(generate_intro_video, image_url)
+                logging.info("STEP 8: Calling Wan 2.1 i2v video generation")
+                video_url = await asyncio.to_thread(generate_intro_video, image_url, image_prompt)
                 logging.info(f"STEP 9: Video URL: {video_url[:80] if video_url else 'EMPTY'}")
 
                 if video_url:
