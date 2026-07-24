@@ -104,6 +104,7 @@ def generate_text_and_extract_prompt(transcript: str, system_prompt: str, target
     if openrouter_client:
         response = openrouter_client.chat.completions.create(
             model="anthropic/claude-sonnet-4-5",
+            max_tokens=4096,
             messages=[
                 {"role": "system", "content": system_prompt + lang_instruction},
                 {"role": "user", "content": f"Here is the transcript of the video:\n\n{transcript}"}

@@ -305,6 +305,15 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
     try:
         prompt_to_use = user_prompts.get(user_id, DEFAULT_PROMPT)
         
+        # Truncate very long transcripts — 15,000 chars is plenty for the production pack
+        MAX_TRANSCRIPT_CHARS = 15000
+        if len(transcript_text) > MAX_TRANSCRIPT_CHARS:
+            transcript_text = transcript_text[:MAX_TRANSCRIPT_CHARS]
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"⚠️ Transcript was very long — trimmed to the first ~15,000 characters for processing."
+            )
+
         await context.bot.send_message(chat_id=chat_id, text=f"🧠 Translating transcript & generating assets in {target_lang}...")
         logging.info(f"STEP 1: Calling AI generation. Transcript length: {len(transcript_text)} chars")
 
