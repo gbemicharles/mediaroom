@@ -1,4 +1,5 @@
 import re
+import logging
 import replicate
 import anthropic
 from openai import OpenAI
