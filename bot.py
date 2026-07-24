@@ -7,7 +7,6 @@ import uuid
 import glob
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
-from youtube_transcript_api import YouTubeTranscriptApi
 from config import check_env_vars, TELEGRAM_BOT_TOKEN, DEFAULT_PROMPT, get_webshare_proxies, WEBSHARE_PROXY_USERNAME, WEBSHARE_PROXY_PASSWORD
 from ai_services import generate_text_and_extract_prompt, generate_thumbnail, generate_intro_video
 
@@ -79,43 +78,72 @@ def _make_session_with_proxy(proxy_url: str = None, timeout: int = 10):
     return session
 
 
-def download_transcript_api(video_url: str) -> str:
-    """Downloads transcript using youtube-transcript-api with Webshare Rotating Residential proxy."""
-    from youtube_transcript_api.proxies import WebshareProxyConfig, GenericProxyConfig
+def download_transcript_direct(video_url: str) -> str:
+    """
+    Downloads transcript by fetching the YouTube watch page directly with browser-style
+    headers through the Webshare rotating residential proxy, then pulling the caption XML.
+    Avoids youtube-transcript-api's rapid-fire internal requests that trigger CAPTCHA.
+    """
+    import requests as req
+    import xml.etree.ElementTree as ET
+    import html
 
     video_id = extract_video_id(video_url)
     if not video_id:
         raise Exception("Could not extract video ID from URL")
 
-    # Build proxy config — prefer rotating residential, fall back to static list
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    }
+
+    # Build proxy — rotating residential if available, else none
+    proxies = None
     if WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD:
-        proxy_config = WebshareProxyConfig(
-            proxy_username=WEBSHARE_PROXY_USERNAME,
-            proxy_password=WEBSHARE_PROXY_PASSWORD,
-        )
-        configs_to_try = [proxy_config]
-    else:
-        proxy_urls = get_webshare_proxies()
-        configs_to_try = [GenericProxyConfig(http_url=p, https_url=p) for p in proxy_urls]
+        proxy_url = f"http://{WEBSHARE_PROXY_USERNAME}-rotate:{WEBSHARE_PROXY_PASSWORD}@p.webshare.io:80"
+        proxies = {"http": proxy_url, "https": proxy_url}
 
-    configs_to_try.append(None)  # last resort: no proxy
+    # Step 1: fetch the watch page
+    r = req.get(
+        f"https://www.youtube.com/watch?v={video_id}",
+        headers=headers, proxies=proxies, timeout=20
+    )
+    r.raise_for_status()
 
-    last_err = None
-    for proxy_config in configs_to_try:
-        try:
-            api = YouTubeTranscriptApi(proxy_config=proxy_config)
-            transcript_list = api.list(video_id)
-            langs = [t.language_code for t in transcript_list]
-            if not langs:
-                raise Exception("No transcripts available for this video.")
-            transcript = transcript_list.find_transcript(langs)
-            transcript_data = transcript.fetch()
-            return " ".join([entry.text for entry in transcript_data])
-        except Exception as e:
-            last_err = e
-            continue
+    # Step 2: extract caption track URLs from the embedded JSON
+    import json
+    match = re.search(r'"captionTracks":(\[.*?\])', r.text)
+    if not match:
+        raise Exception("No caption tracks found — video may have captions disabled.")
 
-    raise Exception(f"youtube-transcript-api failed: {last_err}")
+    tracks = json.loads(match.group(1))
+    if not tracks:
+        raise Exception("No caption tracks available for this video.")
+
+    # Prefer English; fall back to first available track
+    track = next((t for t in tracks if t.get("languageCode", "").startswith("en")), tracks[0])
+    base_url = track.get("baseUrl")
+    if not base_url:
+        raise Exception("Could not extract caption URL.")
+
+    # Step 3: fetch the transcript XML
+    rx = req.get(base_url, headers=headers, proxies=proxies, timeout=15)
+    rx.raise_for_status()
+
+    # Step 4: parse <text> elements
+    root = ET.fromstring(rx.text)
+    lines = []
+    for el in root.iter("text"):
+        text = html.unescape("".join(el.itertext())).strip()
+        text = re.sub(r"\s+", " ", text)
+        if text and text.lower() not in ("[music]", "[applause]", "[laughter]"):
+            lines.append(text)
+
+    if not lines:
+        raise Exception("Transcript was empty after parsing.")
+
+    return " ".join(lines)
 
 def download_transcript_invidious(video_url: str) -> str:
     """Downloads transcript via public Invidious instances (bypasses YouTube IP blocks)."""
@@ -427,17 +455,17 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         def _fetch_transcript():
             """Try all download methods sequentially (runs in a thread)."""
             try:
-                return download_transcript_api(video_url)
-            except Exception as api_err:
-                logging.info(f"youtube-transcript-api failed: {api_err}. Trying Invidious...")
+                return download_transcript_direct(video_url)
+            except Exception as e1:
+                logging.info(f"Direct fetch failed: {e1}. Trying Invidious...")
             try:
                 return download_transcript_invidious(video_url)
-            except Exception as inv_err:
-                logging.info(f"Invidious failed: {inv_err}. Trying yt-dlp...")
+            except Exception as e2:
+                logging.info(f"Invidious failed: {e2}. Trying yt-dlp...")
             try:
                 return download_transcript_ytdlp(video_url)
-            except Exception as ytdlp_err:
-                logging.error(f"All transcript downloaders failed: {ytdlp_err}")
+            except Exception as e3:
+                logging.error(f"All transcript downloaders failed: {e3}")
             return None
 
         try:
