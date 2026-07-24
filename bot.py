@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import logging
@@ -406,30 +407,43 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if video_url:
         await context.bot.send_message(chat_id=chat_id, text="📥 Detected YouTube link. Downloading original transcript automatically...")
-        try:
-            # Try youtube-transcript-api first
-            transcript_text = download_transcript_api(video_url)
-        except Exception as api_err:
-            logging.info(f"youtube-transcript-api failed: {api_err}. Trying Invidious fallback...")
+
+        def _fetch_transcript():
+            """Try all download methods sequentially (runs in a thread)."""
             try:
-                # Fall back to Invidious (bypasses YouTube cloud IP blocks)
-                transcript_text = download_transcript_invidious(video_url)
-            except Exception as invidious_err:
-                logging.info(f"Invidious failed: {invidious_err}. Trying yt-dlp fallback...")
-                try:
-                    # Last resort: yt-dlp
-                    transcript_text = download_transcript_ytdlp(video_url)
-                except Exception as ytdlp_err:
-                    logging.error(f"All transcript downloaders failed.")
-                    error_msg = (
-                        "❌ Could not download transcript automatically.\n\n"
-                        "YouTube is blocking requests from this server's IP address.\n\n"
-                        "👉 What you can do:\n"
-                        "1. Copy & paste the script/transcript directly as a text message to this bot.\n"
-                        "2. Or upload a .txt file containing the script/transcript."
-                    )
-                    await context.bot.send_message(chat_id=chat_id, text=error_msg)
-                    return
+                return download_transcript_api(video_url)
+            except Exception as api_err:
+                logging.info(f"youtube-transcript-api failed: {api_err}. Trying Invidious...")
+            try:
+                return download_transcript_invidious(video_url)
+            except Exception as inv_err:
+                logging.info(f"Invidious failed: {inv_err}. Trying yt-dlp...")
+            try:
+                return download_transcript_ytdlp(video_url)
+            except Exception as ytdlp_err:
+                logging.error(f"All transcript downloaders failed: {ytdlp_err}")
+            return None
+
+        try:
+            transcript_text = await asyncio.wait_for(
+                asyncio.to_thread(_fetch_transcript),
+                timeout=60.0
+            )
+        except asyncio.TimeoutError:
+            transcript_text = None
+
+        if not transcript_text:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    "❌ Could not download transcript automatically.\n\n"
+                    "YouTube is blocking requests from this server's IP address.\n\n"
+                    "👉 What you can do:\n"
+                    "1. Copy & paste the script/transcript directly as a text message to this bot.\n"
+                    "2. Or upload a .txt file containing the script/transcript."
+                )
+            )
+            return
             
     # Combine caption context if transcript came from file
     if caption:
