@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+*.log
+temp_*
+*.vtt
+*.txt
+!requirements.txt
+!help.txt
