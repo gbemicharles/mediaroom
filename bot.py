@@ -281,8 +281,10 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
         
         await context.bot.send_message(chat_id=chat_id, text=f"🧠 Translating transcript & generating assets in {target_lang}...")
         
-        full_text, image_prompt, translated_transcript = generate_text_and_extract_prompt(transcript_text, prompt_to_use, target_lang)
-        
+        full_text, image_prompt, translated_transcript = await asyncio.to_thread(
+            generate_text_and_extract_prompt, transcript_text, prompt_to_use, target_lang
+        )
+
         # Send translated transcript as a file
         if translated_transcript:
             filename = f"transcript_{target_lang}.txt"
@@ -312,15 +314,15 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             await context.bot.send_message(chat_id=chat_id, text=full_text)
             
         if image_prompt and image_prompt != "A generic YouTube thumbnail":
-            await context.bot.send_message(chat_id=chat_id, text=f"🎨 Generating thumbnail based on prompt: \n`{image_prompt}`")
-            image_url = generate_thumbnail(image_prompt)
-            
+            await context.bot.send_message(chat_id=chat_id, text=f"🎨 Generating thumbnail...\n`{image_prompt}`")
+            image_url = await asyncio.to_thread(generate_thumbnail, image_prompt)
+
             if image_url:
                 await context.bot.send_photo(chat_id=chat_id, photo=image_url, caption="✅ Generated Thumbnail")
-                
-                await context.bot.send_message(chat_id=chat_id, text="🎬 Generating short intro video from the thumbnail (this might take a minute)...")
-                video_url = generate_intro_video(image_url)
-                
+
+                await context.bot.send_message(chat_id=chat_id, text="🎬 Generating intro video (~1 min)...")
+                video_url = await asyncio.to_thread(generate_intro_video, image_url)
+
                 if video_url:
                     await context.bot.send_video(chat_id=chat_id, video=video_url, caption="✅ Generated Intro Video")
                 else:

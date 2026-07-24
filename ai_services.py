@@ -230,26 +230,27 @@ A close-up studio portrait of a 45-year-old male historian with short grey hair 
     return full_text, thumbnail_prompt, final_transcript
 
 def generate_thumbnail(image_prompt: str) -> str:
-    """Calls FLUX 1.1 Pro via Replicate to generate a thumbnail and returns the URL."""
+    """Calls FLUX Schnell via Replicate to generate a thumbnail and returns the URL."""
     if not REPLICATE_API_TOKEN:
         return "https://placehold.co/1280x720/png?text=Mock+Thumbnail"
 
     try:
         output = replicate.run(
-            "black-forest-labs/flux-1.1-pro",
+            "black-forest-labs/flux-schnell",
             input={
                 "prompt": image_prompt,
-                "width": 1280,
-                "height": 720,
+                "num_outputs": 1,
+                "aspect_ratio": "16:9",
                 "output_format": "jpg",
-                "output_quality": 95,
-                "safety_tolerance": 2,
+                "output_quality": 90,
+                "go_fast": True,
             }
         )
-        # Output is a URL string or FileOutput object
-        if hasattr(output, 'url'):
-            return str(output.url)
-        return str(output)
+        # Output is a list of URLs or FileOutput objects
+        result = output[0] if isinstance(output, list) else output
+        if hasattr(result, 'url'):
+            return str(result.url)
+        return str(result)
     except Exception as e:
         print(f"Error generating thumbnail: {e}")
         return ""
@@ -266,10 +267,10 @@ def generate_intro_video(image_url: str) -> str:
                 "cond_aug": 0.02,
                 "decoding_t": 7,
                 "input_image": image_url,
-                "video_length": "25_frames_with_svd",
+                "video_length": "14_frames_with_svd_xt",
                 "sizing_strategy": "maintain_aspect_ratio",
                 "motion_bucket_id": 127,
-                "frames_per_second": 4
+                "frames_per_second": 6
             }
         )
         return output
