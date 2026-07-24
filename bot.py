@@ -7,7 +7,7 @@ import glob
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from youtube_transcript_api import YouTubeTranscriptApi
-from config import check_env_vars, TELEGRAM_BOT_TOKEN, DEFAULT_PROMPT, get_proxy_url
+from config import check_env_vars, TELEGRAM_BOT_TOKEN, DEFAULT_PROMPT, get_webshare_proxies
 from ai_services import generate_text_and_extract_prompt, generate_thumbnail, generate_intro_video
 
 # Setup logging
@@ -58,27 +58,33 @@ def extract_video_id(url):
     return None
 
 def download_transcript_api(video_url: str) -> str:
-    """Downloads transcript using youtube-transcript-api with Webshare proxy."""
+    """Downloads transcript using youtube-transcript-api, trying Webshare proxies in turn."""
+    from youtube_transcript_api.proxies import GenericProxyConfig
+
     video_id = extract_video_id(video_url)
     if not video_id:
         raise Exception("Could not extract video ID from URL")
 
-    proxy_url = get_proxy_url()
-    proxies = {"https": proxy_url, "http": proxy_url} if proxy_url else None
+    proxy_urls = get_webshare_proxies()
+    # Build list of configs to try: each proxy first, then no-proxy as last resort
+    configs_to_try = [GenericProxyConfig(http_url=p, https_url=p) for p in proxy_urls] + [None]
 
-    try:
-        api = YouTubeTranscriptApi(proxies=proxies) if proxies else YouTubeTranscriptApi()
-        transcript_list = api.list(video_id)
-        langs = [t.language_code for t in transcript_list]
-        if not langs:
-            raise Exception("No transcripts available for this video.")
-            
-        transcript = transcript_list.find_transcript(langs)
-        transcript_data = transcript.fetch()
-        text = " ".join([entry.text for entry in transcript_data])
-        return text
-    except Exception as e:
-        raise Exception(f"youtube-transcript-api failed: {e}")
+    last_err = None
+    for proxy_config in configs_to_try:
+        try:
+            api = YouTubeTranscriptApi(proxy_config=proxy_config)
+            transcript_list = api.list(video_id)
+            langs = [t.language_code for t in transcript_list]
+            if not langs:
+                raise Exception("No transcripts available for this video.")
+            transcript = transcript_list.find_transcript(langs)
+            transcript_data = transcript.fetch()
+            return " ".join([entry.text for entry in transcript_data])
+        except Exception as e:
+            last_err = e
+            continue
+
+    raise Exception(f"youtube-transcript-api failed: {last_err}")
 
 def download_transcript_invidious(video_url: str) -> str:
     """Downloads transcript via public Invidious instances (bypasses YouTube IP blocks)."""
@@ -156,9 +162,9 @@ def download_transcript_ytdlp(video_url: str) -> str:
         "-o", temp_template,
     ]
 
-    proxy_url = get_proxy_url()
-    if proxy_url:
-        cmd += ["--proxy", proxy_url]
+    proxy_urls = get_webshare_proxies()
+    if proxy_urls:
+        cmd += ["--proxy", proxy_urls[0]]
 
     cmd.append(video_url)
     

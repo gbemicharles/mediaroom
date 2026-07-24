@@ -22,15 +22,36 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 # OpenRouter API Key (for Text generation via OpenRouter - routes to Claude, GPT-4o, etc.)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# Webshare Proxy credentials (for bypassing YouTube IP blocks)
-WEBSHARE_PROXY_USERNAME = os.getenv("WEBSHARE_PROXY_USERNAME")
-WEBSHARE_PROXY_PASSWORD = os.getenv("WEBSHARE_PROXY_PASSWORD")
+# Webshare API token (for fetching proxy list)
+WEBSHARE_API_TOKEN = os.getenv("WEBSHARE_API_TOKEN")
 
-def get_proxy_url():
-    """Returns the Webshare rotating proxy URL, or None if not configured."""
-    if WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD:
-        return f"http://{WEBSHARE_PROXY_USERNAME}:{WEBSHARE_PROXY_PASSWORD}@proxy.webshare.io:80"
-    return None
+_webshare_proxy_cache = None
+
+def get_webshare_proxies():
+    """Fetch and cache the Webshare proxy list. Returns list of proxy URLs."""
+    global _webshare_proxy_cache
+    if _webshare_proxy_cache is not None:
+        return _webshare_proxy_cache
+    if not WEBSHARE_API_TOKEN:
+        _webshare_proxy_cache = []
+        return []
+    try:
+        import requests as _req
+        r = _req.get(
+            "https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=25",
+            headers={"Authorization": f"Token {WEBSHARE_API_TOKEN}"},
+            timeout=10,
+        )
+        results = r.json().get("results", [])
+        _webshare_proxy_cache = [
+            f"http://{p['username']}:{p['password']}@{p['proxy_address']}:{p['port']}"
+            for p in results if p.get("valid")
+        ]
+        print(f"INFO: Loaded {len(_webshare_proxy_cache)} Webshare proxies.")
+    except Exception as e:
+        print(f"WARNING: Could not fetch Webshare proxy list: {e}")
+        _webshare_proxy_cache = []
+    return _webshare_proxy_cache
 
 # Channel Bedtime Story Introduction
 CHANNEL_INTRODUCTION = (
