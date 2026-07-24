@@ -8,7 +8,7 @@ import glob
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from config import check_env_vars, TELEGRAM_BOT_TOKEN, DEFAULT_PROMPT, get_webshare_proxies, WEBSHARE_PROXY_USERNAME, WEBSHARE_PROXY_PASSWORD
-from ai_services import generate_text_and_extract_prompt, generate_thumbnail, generate_intro_video
+from ai_services import generate_text_and_extract_prompt, generate_thumbnail, generate_intro_video, translate_chunk, split_transcript_into_chunks
 
 # Setup logging
 logging.basicConfig(
@@ -364,30 +364,48 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
     try:
         prompt_to_use = user_prompts.get(user_id, DEFAULT_PROMPT)
 
-        # Truncate very long transcripts — 15,000 chars is plenty for the production pack
-        MAX_TRANSCRIPT_CHARS = 15000
-        if len(transcript_text) > MAX_TRANSCRIPT_CHARS:
-            transcript_text = transcript_text[:MAX_TRANSCRIPT_CHARS]
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="⚠️ Transcript was very long — trimmed to the first ~15,000 characters for processing."
+        # Split transcript into 10,000-char chunks at sentence boundaries
+        CHUNK_SIZE = 10000
+        chunks = split_transcript_into_chunks(transcript_text, max_chars=CHUNK_SIZE)
+        total_chunks = len(chunks)
+
+        if total_chunks > 1:
+            await _send_html(
+                context.bot, chat_id,
+                f"🧠 <b>Generating production pack in {_html(target_lang)}…</b>\n"
+                f"<i>Transcript split into {total_chunks} parts — translating all of them. This may take a few minutes.</i>"
             )
+        else:
+            await _send_html(
+                context.bot, chat_id,
+                f"🧠 <b>Generating production pack in {_html(target_lang)}…</b>\n"
+                f"<i>Translating transcript, writing scripts, building assets — hang tight.</i>"
+            )
+        logging.info(f"STEP 1: {total_chunks} chunk(s). Total chars: {len(transcript_text)}")
 
-        await _send_html(
-            context.bot, chat_id,
-            f"🧠 <b>Generating production pack in {_html(target_lang)}…</b>\n"
-            f"<i>Translating transcript, writing scripts, building assets — hang tight.</i>"
+        # Chunk 1 → full production pack + translated first part
+        full_text, image_prompt, translated_part1 = await asyncio.to_thread(
+            generate_text_and_extract_prompt, chunks[0], prompt_to_use, target_lang
         )
-        logging.info(f"STEP 1: Calling AI generation. Transcript length: {len(transcript_text)} chars")
+        logging.info(f"STEP 2: Chunk 1 done. pack={len(full_text)} chars, transcript_part={len(translated_part1)} chars")
 
-        full_text, image_prompt, translated_transcript = await asyncio.to_thread(
-            generate_text_and_extract_prompt, transcript_text, prompt_to_use, target_lang
-        )
-        logging.info(f"STEP 2: AI done. full_text={len(full_text)} chars, image_prompt={bool(image_prompt)}, transcript={len(translated_transcript)} chars")
+        # Remaining chunks → translation only
+        translated_parts = [translated_part1] if translated_part1 else []
+        for idx, chunk in enumerate(chunks[1:], start=2):
+            await _send_html(
+                context.bot, chat_id,
+                f"🔄 <b>Translating part {idx}/{total_chunks}…</b>"
+            )
+            logging.info(f"STEP 2.{idx}: Translating chunk {idx}/{total_chunks} ({len(chunk)} chars)")
+            part = await asyncio.to_thread(translate_chunk, chunk, target_lang)
+            translated_parts.append(part)
+            logging.info(f"STEP 2.{idx}: Done ({len(part)} chars)")
+
+        translated_transcript = "\n\n".join(translated_parts)
+        logging.info(f"STEP 3: Combined transcript: {len(translated_transcript)} chars across {len(translated_parts)} parts")
 
         # ── Translated transcript .txt ───────────────────────────────────────
-        if translated_transcript:
-            logging.info("STEP 3: Sending translated transcript file")
+        if translated_transcript.strip():
             filename = f"transcript_{target_lang.replace(' ', '_')}.txt"
             filepath = os.path.join(os.getcwd(), filename)
             with open(filepath, "w", encoding="utf-8") as f:
@@ -408,7 +426,7 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
                 if os.path.exists(filepath):
                     os.remove(filepath)
         else:
-            logging.warning("STEP 3: No translated_transcript extracted — Claude may have run out of tokens.")
+            logging.warning("STEP 3: No translated transcript — chunk 1 may have run out of tokens.")
 
         # ── Production pack ──────────────────────────────────────────────────
         logging.info(f"STEP 4: Sending production pack ({len(full_text)} chars)")

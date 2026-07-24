@@ -16,6 +16,74 @@ anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_A
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 # Replicate automatically picks up REPLICATE_API_TOKEN from env vars
 
+def split_transcript_into_chunks(text: str, max_chars: int = 10000) -> list[str]:
+    """Split a transcript at sentence boundaries so each chunk is ≤ max_chars."""
+    if len(text) <= max_chars:
+        return [text]
+    sentences = re.split(r'(?<=[.!?।。！？])\s+', text.strip())
+    chunks, current, current_len = [], [], 0
+    for sentence in sentences:
+        slen = len(sentence)
+        if current and current_len + slen + 1 > max_chars:
+            chunks.append(" ".join(current))
+            current, current_len = [sentence], slen
+        else:
+            current.append(sentence)
+            current_len += slen + 1
+    if current:
+        chunks.append(" ".join(current))
+    return chunks
+
+
+def translate_chunk(chunk: str, target_lang: str) -> str:
+    """Translate / rewrite a single transcript chunk. Returns plain translated text."""
+    system_prompt = (
+        f"You are a professional script rewriter for a premium relaxation and sleep documentary channel. "
+        f"Rewrite the following transcript excerpt into {target_lang}.\n"
+        f"Rules:\n"
+        f"- Never translate literally — extract ideas and historical facts, then write a completely new, better script.\n"
+        f"- Keep the narrative logical, calm, and soothing; maintain historical facts but rewrite all phrasing.\n"
+        f"- Convert all numerals into full words in {target_lang}.\n"
+        f"- Output ONLY the rewritten text as a single continuous block. No XML tags, no headers, no commentary.\n"
+        f"- Remove all advertisements, sponsorships, promotions, and mentions of other channels."
+    )
+    try:
+        if openrouter_client:
+            resp = openrouter_client.chat.completions.create(
+                model="anthropic/claude-sonnet-4-5",
+                max_tokens=8192,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": chunk},
+                ],
+                temperature=0.7,
+            )
+            return resp.choices[0].message.content.strip()
+        elif anthropic_client:
+            msg = anthropic_client.messages.create(
+                model="claude-sonnet-4-5",
+                max_tokens=8192,
+                system=system_prompt,
+                messages=[{"role": "user", "content": chunk}],
+                temperature=0.7,
+            )
+            return msg.content[0].text.strip()
+        elif openai_client:
+            resp = openai_client.chat.completions.create(
+                model="gpt-4o",
+                max_tokens=8192,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": chunk},
+                ],
+                temperature=0.7,
+            )
+            return resp.choices[0].message.content.strip()
+    except Exception as e:
+        logging.error(f"translate_chunk error: {e}")
+    return chunk   # fallback: return original text
+
+
 def split_into_paragraphs(text: str, min_chars: int = 500, max_chars: int = 999) -> list[str]:
     """Splits text into paragraphs where each paragraph is under max_chars
     and usually between min_chars and max_chars. Sentence boundary checks support
