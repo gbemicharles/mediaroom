@@ -389,14 +389,29 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
         )
         logging.info(f"STEP 1: {total_chunks} chunk(s), {len(transcript_text)} total chars. Launching parallel tasks.")
 
+        async def _translate_with_retry(chunk: str, lang: str, max_retries: int = 2) -> str:
+            """Run translate_chunk in a thread; retry up to max_retries times on failure."""
+            for attempt in range(1, max_retries + 1):
+                try:
+                    result = await asyncio.to_thread(translate_chunk, chunk, lang)
+                    if result and result.strip():
+                        return result
+                    logging.warning(f"translate_chunk attempt {attempt} returned empty — retrying")
+                except Exception as e:
+                    logging.warning(f"translate_chunk attempt {attempt} failed: {e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(2)
+            logging.error("All translate_chunk retries exhausted — using original text")
+            return chunk
+
         # Fire everything simultaneously:
         #   • production pack from chunk 0 (titles, SEO, scripts, etc.)
-        #   • translate_chunk for every chunk in parallel
+        #   • translate_chunk (Haiku) for every chunk in parallel, with retry
         pack_task = asyncio.to_thread(
             generate_text_and_extract_prompt, chunks[0], prompt_to_use, target_lang
         )
         translate_tasks = [
-            asyncio.to_thread(translate_chunk, chunk, target_lang)
+            _translate_with_retry(chunk, target_lang)
             for chunk in chunks
         ]
 
@@ -494,6 +509,19 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
         else:
             await _send_html(context.bot, chat_id, "⚠️ <b>No thumbnail prompt found</b> in the AI response.")
 
+        # ── Summary card ─────────────────────────────────────────────────────
+        has_thumbnail = bool(image_prompt and image_prompt != "A generic YouTube thumbnail")
+        summary_lines = [
+            f"✅ <b>Production pack complete!</b>",
+            f"",
+            f"📄 Transcript — <b>{total_chunks}</b> part(s) translated &amp; combined",
+            f"🎬 Production pack — titles, SEO, hashtags, host script",
+            f"🖼️ Thumbnail — {'generated' if has_thumbnail else '⚠️ skipped (no prompt)'}",
+            f"🎞️ Intro video — {'generated' if has_thumbnail else '⚠️ skipped'}",
+            f"",
+            f"<i>Send another transcript or YouTube link to start a new job.</i>",
+        ]
+        await _send_html(context.bot, chat_id, "\n".join(summary_lines))
         logging.info("STEP 10: process_transcript complete")
 
     except Exception as e:
