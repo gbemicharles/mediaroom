@@ -57,22 +57,42 @@ def extract_video_id(url):
         return match.group(1)
     return None
 
+def _make_session_with_proxy(proxy_url: str = None, timeout: int = 10):
+    """Creates a requests.Session with optional proxy and a per-request timeout."""
+    import requests as req
+    from requests.adapters import HTTPAdapter
+
+    class TimeoutAdapter(HTTPAdapter):
+        def __init__(self, timeout, *args, **kwargs):
+            self._timeout = timeout
+            super().__init__(*args, **kwargs)
+        def send(self, *args, **kwargs):
+            kwargs.setdefault("timeout", self._timeout)
+            return super().send(*args, **kwargs)
+
+    session = req.Session()
+    session.mount("http://", TimeoutAdapter(timeout))
+    session.mount("https://", TimeoutAdapter(timeout))
+    if proxy_url:
+        session.proxies = {"http": proxy_url, "https": proxy_url}
+    return session
+
+
 def download_transcript_api(video_url: str) -> str:
     """Downloads transcript using youtube-transcript-api, trying Webshare proxies in turn."""
-    from youtube_transcript_api.proxies import GenericProxyConfig
-
     video_id = extract_video_id(video_url)
     if not video_id:
         raise Exception("Could not extract video ID from URL")
 
     proxy_urls = get_webshare_proxies()
-    # Build list of configs to try: each proxy first, then no-proxy as last resort
-    configs_to_try = [GenericProxyConfig(http_url=p, https_url=p) for p in proxy_urls] + [None]
+    # Try each proxy with a 10s timeout, then fall back to no proxy
+    candidates = proxy_urls + [None]
 
     last_err = None
-    for proxy_config in configs_to_try:
+    for proxy_url in candidates:
         try:
-            api = YouTubeTranscriptApi(proxy_config=proxy_config)
+            session = _make_session_with_proxy(proxy_url, timeout=10)
+            api = YouTubeTranscriptApi(http_client=session)
             transcript_list = api.list(video_id)
             langs = [t.language_code for t in transcript_list]
             if not langs:
