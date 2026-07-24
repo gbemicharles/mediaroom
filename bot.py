@@ -209,15 +209,17 @@ def download_transcript_invidious(video_url: str) -> str:
 
 
 def download_transcript_ytdlp(video_url: str) -> str:
-    """Downloads transcript using yt-dlp with Webshare proxy, cleans it, and returns the text."""
+    """Downloads transcript using yt-dlp with Chrome impersonation + Webshare proxy."""
     unique_id = str(uuid.uuid4())
     temp_template = os.path.join(os.getcwd(), f"temp_{unique_id}.%(ext)s")
 
     cmd = [
         "yt-dlp",
+        "--impersonate", "Chrome-136",
         "--write-auto-subs",
         "--write-subs",
         "--skip-download",
+        "--sub-langs", "en.*",   # only grab English; avoids 429s from downloading many langs
         "-o", temp_template,
     ]
 
@@ -455,15 +457,15 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         def _fetch_transcript():
             """Try all download methods sequentially (runs in a thread)."""
             try:
-                return download_transcript_direct(video_url)
+                return download_transcript_ytdlp(video_url)
             except Exception as e1:
-                logging.info(f"Direct fetch failed: {e1}. Trying Invidious...")
+                logging.info(f"yt-dlp failed: {e1}. Trying direct fetch...")
+            try:
+                return download_transcript_direct(video_url)
+            except Exception as e2:
+                logging.info(f"Direct fetch failed: {e2}. Trying Invidious...")
             try:
                 return download_transcript_invidious(video_url)
-            except Exception as e2:
-                logging.info(f"Invidious failed: {e2}. Trying yt-dlp...")
-            try:
-                return download_transcript_ytdlp(video_url)
             except Exception as e3:
                 logging.error(f"All transcript downloaders failed: {e3}")
             return None
