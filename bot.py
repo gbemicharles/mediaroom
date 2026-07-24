@@ -8,7 +8,7 @@ import glob
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from youtube_transcript_api import YouTubeTranscriptApi
-from config import check_env_vars, TELEGRAM_BOT_TOKEN, DEFAULT_PROMPT, get_webshare_proxies
+from config import check_env_vars, TELEGRAM_BOT_TOKEN, DEFAULT_PROMPT, get_webshare_proxies, WEBSHARE_PROXY_USERNAME, WEBSHARE_PROXY_PASSWORD
 from ai_services import generate_text_and_extract_prompt, generate_thumbnail, generate_intro_video
 
 # Setup logging
@@ -80,20 +80,30 @@ def _make_session_with_proxy(proxy_url: str = None, timeout: int = 10):
 
 
 def download_transcript_api(video_url: str) -> str:
-    """Downloads transcript using youtube-transcript-api, trying Webshare proxies in turn."""
+    """Downloads transcript using youtube-transcript-api with Webshare Rotating Residential proxy."""
+    from youtube_transcript_api.proxies import WebshareProxyConfig, GenericProxyConfig
+
     video_id = extract_video_id(video_url)
     if not video_id:
         raise Exception("Could not extract video ID from URL")
 
-    proxy_urls = get_webshare_proxies()
-    # Try each proxy with a 10s timeout, then fall back to no proxy
-    candidates = proxy_urls + [None]
+    # Build proxy config — prefer rotating residential, fall back to static list
+    if WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD:
+        proxy_config = WebshareProxyConfig(
+            proxy_username=WEBSHARE_PROXY_USERNAME,
+            proxy_password=WEBSHARE_PROXY_PASSWORD,
+        )
+        configs_to_try = [proxy_config]
+    else:
+        proxy_urls = get_webshare_proxies()
+        configs_to_try = [GenericProxyConfig(http_url=p, https_url=p) for p in proxy_urls]
+
+    configs_to_try.append(None)  # last resort: no proxy
 
     last_err = None
-    for proxy_url in candidates:
+    for proxy_config in configs_to_try:
         try:
-            session = _make_session_with_proxy(proxy_url, timeout=10)
-            api = YouTubeTranscriptApi(http_client=session)
+            api = YouTubeTranscriptApi(proxy_config=proxy_config)
             transcript_list = api.list(video_id)
             langs = [t.language_code for t in transcript_list]
             if not langs:
@@ -183,9 +193,13 @@ def download_transcript_ytdlp(video_url: str) -> str:
         "-o", temp_template,
     ]
 
-    proxy_urls = get_webshare_proxies()
-    if proxy_urls:
-        cmd += ["--proxy", proxy_urls[0]]
+    if WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD:
+        rotating_proxy = f"http://{WEBSHARE_PROXY_USERNAME}-rotate:{WEBSHARE_PROXY_PASSWORD}@p.webshare.io:80"
+        cmd += ["--proxy", rotating_proxy]
+    else:
+        proxy_urls = get_webshare_proxies()
+        if proxy_urls:
+            cmd += ["--proxy", proxy_urls[0]]
 
     cmd.append(video_url)
     

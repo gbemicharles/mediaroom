@@ -22,8 +22,10 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 # OpenRouter API Key (for Text generation via OpenRouter - routes to Claude, GPT-4o, etc.)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-# Webshare API token (for fetching proxy list)
+# Webshare credentials
 WEBSHARE_API_TOKEN = os.getenv("WEBSHARE_API_TOKEN")
+WEBSHARE_PROXY_USERNAME = os.getenv("WEBSHARE_PROXY_USERNAME")
+WEBSHARE_PROXY_PASSWORD = os.getenv("WEBSHARE_PROXY_PASSWORD")
 
 _webshare_proxy_cache = None
 
