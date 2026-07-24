@@ -233,7 +233,7 @@ def generate_text_and_extract_prompt(transcript: str, system_prompt: str, target
 🇷🇺: Тени Рима: Расслабляющий Документальный Фильм
 
 --------------------------------------------------
-# 2. WINNER
+# 2. BEST TITLE
 {target_lang}: Shadows of Rome: A Relaxing Documentary
 🇷🇺: Тени Рима: Расслабляющий Документальный Фильм
 

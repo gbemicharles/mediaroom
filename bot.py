@@ -304,7 +304,7 @@ def get_language_keyboard():
 def _parse_production_pack(full_text: str) -> list[tuple[str, str]]:
     """Parse the AI production pack into (header, body) section pairs for pretty formatting."""
     SECTION_EMOJIS = {
-        "TITLE": "🏆", "WINNER": "🥇", "SEO": "📋", "DESCRIPTION": "📋",
+        "TITLE": "🏆", "BEST TITLE": "🥇", "WINNER": "🥇", "SEO": "📋", "DESCRIPTION": "📋",
         "HASHTAG": "#️⃣", "TAG": "🏷️", "HOST SCRIPT": "🎙️", "SCRIPT": "🎙️",
         "PHOTO PROMPT": "📸", "THUMBNAIL": "🖼️",
     }
@@ -326,6 +326,9 @@ def _parse_production_pack(full_text: str) -> list[tuple[str, str]]:
         header_match = re.match(r'^#{1,3}\s*\d+[\.\)]\s+(.+)', part)
         if header_match:
             title = header_match.group(1).strip()
+            # Normalise legacy label
+            if title.upper() == "WINNER":
+                title = "BEST TITLE"
             body = part[header_match.end():].strip()
             em = emoji_for(title)
             sections.append((f"{em} {title}", body))
@@ -337,8 +340,16 @@ def _parse_production_pack(full_text: str) -> list[tuple[str, str]]:
 
 
 def _html(text: str) -> str:
-    """Escape text for Telegram HTML parse mode."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    """Escape text for Telegram HTML parse mode, converting common markdown to HTML tags."""
+    # Escape HTML special chars first
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Convert markdown bold/italic to HTML (after escaping so we don't double-escape)
+    text = re.sub(r'\*\*\*(.+?)\*\*\*', r'<b><i>\1</i></b>', text, flags=re.DOTALL)
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text, flags=re.DOTALL)
+    text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text, flags=re.DOTALL)
+    # Strip leftover lone asterisks (e.g. bullet points written as "* item")
+    text = re.sub(r'(?m)^\* ', '• ', text)
+    return text
 
 
 async def _send_html(bot, chat_id: int, text: str):
