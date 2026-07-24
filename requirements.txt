@@ -1,8 +1,11 @@
 python-telegram-bot==21.1.1
 openai
+anthropic
 replicate==0.28.0
 python-dotenv==1.0.1
 requests==2.32.3
 yt-dlp
 google-generativeai
 youtube-transcript-api
+anthropic
+telegram

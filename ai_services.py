@@ -1,10 +1,12 @@
 import re
 import replicate
+import anthropic
 from openai import OpenAI
 import google.generativeai as genai
-from config import OPENAI_API_KEY, REPLICATE_API_TOKEN, GEMINI_API_KEY, CHANNEL_INTRODUCTION
+from config import ANTHROPIC_API_KEY, OPENAI_API_KEY, REPLICATE_API_TOKEN, GEMINI_API_KEY, CHANNEL_INTRODUCTION
 
 # Initialize clients safely
+anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 # Replicate automatically picks up REPLICATE_API_TOKEN from env vars
 
@@ -13,7 +15,6 @@ def split_into_paragraphs(text: str, min_chars: int = 500, max_chars: int = 999)
     and usually between min_chars and max_chars. Sentence boundary checks support
     both Western and CJK punctuation.
     """
-    # Split by sentence ending punctuation followed by optional whitespace
     sentences = re.split(r'(?<=[.!?。！？])\s*', text.strip())
     paragraphs = []
     current_para = []
@@ -23,7 +24,6 @@ def split_into_paragraphs(text: str, min_chars: int = 500, max_chars: int = 999)
         if not sentence:
             continue
         sentence_len = len(sentence)
-        # If adding this sentence exceeds max_chars, we must commit current paragraph
         if current_para and (current_len + 1 + sentence_len > max_chars):
             paragraphs.append(" ".join(current_para))
             current_para = [sentence]
@@ -36,7 +36,6 @@ def split_into_paragraphs(text: str, min_chars: int = 500, max_chars: int = 999)
                 current_para = [sentence]
                 current_len = sentence_len
             
-            # If current paragraph length is at least min_chars, we can start a new paragraph for the next sentence
             if current_len >= min_chars:
                 paragraphs.append(" ".join(current_para))
                 current_para = []
@@ -48,7 +47,7 @@ def split_into_paragraphs(text: str, min_chars: int = 500, max_chars: int = 999)
     return paragraphs
 
 def generate_text_and_extract_prompt(transcript: str, system_prompt: str, target_lang: str = "English") -> tuple[str, str, str]:
-    """Calls Gemini (or fallback OpenAI) to translate, rewrite, extract thumbnail prompt,
+    """Calls Claude (primary), Gemini, or OpenAI to translate, rewrite, extract thumbnail prompt,
     and format the transcript into paragraphs with the channel's custom introduction.
     """
     if "Production Pack" in system_prompt or "premium media studio" in system_prompt:
@@ -68,7 +67,7 @@ def generate_text_and_extract_prompt(transcript: str, system_prompt: str, target
             f"   - Output the rewritten script as one single continuous block of text inside the <translated_transcript> tags, without breaking it into paragraphs or adding additional comments.\n"
             f"   - Automatically check for and remove advertisements, sponsored content, promotions, and mentions of other channels.\n\n"
             f"Do NOT translate the AI host photo prompt or the thumbnail prompt; they must remain in English.\n"
-            f"Remember to wrap the DALL-E 3 image generation prompt in <thumbnail_prompt>...</thumbnail_prompt> inside Section 8."
+            f"Remember to wrap the image generation prompt in <thumbnail_prompt>...</thumbnail_prompt> inside Section 8."
         )
     else:
         lang_instruction = (
@@ -96,7 +95,19 @@ def generate_text_and_extract_prompt(transcript: str, system_prompt: str, target
         )
 
     full_text = ""
-    if GEMINI_API_KEY:
+
+    if anthropic_client:
+        message = anthropic_client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=8096,
+            system=system_prompt + lang_instruction,
+            messages=[
+                {"role": "user", "content": f"Here is the transcript of the video:\n\n{transcript}"}
+            ],
+            temperature=0.7,
+        )
+        full_text = message.content[0].text
+    elif GEMINI_API_KEY:
         genai.configure(api_key=GEMINI_API_KEY)
         model = genai.GenerativeModel(
             model_name='gemini-1.5-flash',
@@ -204,21 +215,26 @@ A close-up studio portrait of a 45-year-old male historian with short grey hair 
     return full_text, thumbnail_prompt, final_transcript
 
 def generate_thumbnail(image_prompt: str) -> str:
-    """Calls OpenAI DALL-E 3 to generate a thumbnail and returns the URL."""
-    if not openai_client:
-        # MOCK MODE (Return a placeholder image)
-        return "https://placehold.co/1024x1024/png?text=Mock+Thumbnail"
+    """Calls FLUX 1.1 Pro via Replicate to generate a thumbnail and returns the URL."""
+    if not REPLICATE_API_TOKEN:
+        return "https://placehold.co/1280x720/png?text=Mock+Thumbnail"
 
     try:
-        response = openai_client.images.generate(
-            model="dall-e-3",
-            prompt=image_prompt,
-            size="1024x1024",  # Note: DALL-E 3 supports 1792x1024 for landscape, which is better for YT, but we'll stick to standard or try landscape
-            quality="standard",
-            n=1,
+        output = replicate.run(
+            "black-forest-labs/flux-1.1-pro",
+            input={
+                "prompt": image_prompt,
+                "width": 1280,
+                "height": 720,
+                "output_format": "jpg",
+                "output_quality": 95,
+                "safety_tolerance": 2,
+            }
         )
-        # Trying landscape if 1024x1024 doesn't work, but standard 1024x1024 is safer
-        return response.data[0].url
+        # Output is a URL string or FileOutput object
+        if hasattr(output, 'url'):
+            return str(output.url)
+        return str(output)
     except Exception as e:
         print(f"Error generating thumbnail: {e}")
         return ""
@@ -226,19 +242,16 @@ def generate_thumbnail(image_prompt: str) -> str:
 def generate_intro_video(image_url: str) -> str:
     """Calls Replicate to generate a short intro video based on the thumbnail."""
     if not REPLICATE_API_TOKEN:
-        # MOCK MODE (Return a placeholder video or just a dummy URL)
-        # Note: Telegram expects a valid video file. We'll return a sample valid mp4 URL.
         return "https://www.w3schools.com/html/mov_bbb.mp4"
 
     try:
-        # Using Stable Video Diffusion which is great for image-to-video
         output = replicate.run(
             "stability-ai/stable-video-diffusion:3f0457e4619daac51203dedb472816fd4af51f3149fa7a9e0b5ffcf1b8172438",
             input={
                 "cond_aug": 0.02,
                 "decoding_t": 7,
                 "input_image": image_url,
-                "video_length": "25_frames_with_svd", # longer 5-8 sec clip (25 frames @ 4fps = 6.25s)
+                "video_length": "25_frames_with_svd",
                 "sizing_strategy": "maintain_aspect_ratio",
                 "motion_bucket_id": 127,
                 "frames_per_second": 4
