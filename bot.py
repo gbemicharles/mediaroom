@@ -224,8 +224,11 @@ def download_transcript_ytdlp(video_url: str) -> str:
     ]
 
     if WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD:
-        rotating_proxy = f"http://{WEBSHARE_PROXY_USERNAME}-rotate:{WEBSHARE_PROXY_PASSWORD}@p.webshare.io:80"
-        cmd += ["--proxy", rotating_proxy]
+        # Plain format (no -rotate suffix) keeps the same exit IP for the whole
+        # yt-dlp process — required so the subtitle CDN URL (which is IP-bound)
+        # is fetched from the same IP that requested it.
+        stable_proxy = f"http://{WEBSHARE_PROXY_USERNAME}:{WEBSHARE_PROXY_PASSWORD}@p.webshare.io:80"
+        cmd += ["--proxy", stable_proxy]
     else:
         proxy_urls = get_webshare_proxies()
         if proxy_urls:
