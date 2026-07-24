@@ -77,6 +77,67 @@ def download_transcript_api(video_url: str) -> str:
     except Exception as e:
         raise Exception(f"youtube-transcript-api failed: {e}")
 
+def download_transcript_invidious(video_url: str) -> str:
+    """Downloads transcript via public Invidious instances (bypasses YouTube IP blocks)."""
+    import requests as req
+    video_id = extract_video_id(video_url)
+    if not video_id:
+        raise Exception("Could not extract video ID from URL")
+
+    # Public Invidious instances to try in order
+    instances = [
+        "https://inv.nadeko.net",
+        "https://invidious.nikkosphere.com",
+        "https://iv.melmac.space",
+        "https://invidious.privacydev.net",
+        "https://yt.artemislena.eu",
+    ]
+
+    last_error = None
+    for instance in instances:
+        try:
+            # Get list of available caption tracks
+            captions_url = f"{instance}/api/v1/captions/{video_id}"
+            resp = req.get(captions_url, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+
+            captions = data.get("captions", [])
+            if not captions:
+                continue
+
+            # Prefer English, fall back to first available
+            track = next((c for c in captions if "en" in c.get("language_code", "").lower()), captions[0])
+            subtitle_url = track.get("url")
+            if not subtitle_url:
+                continue
+
+            # Invidious returns relative URLs — prepend instance
+            if subtitle_url.startswith("/"):
+                subtitle_url = instance + subtitle_url
+
+            sub_resp = req.get(subtitle_url, timeout=10)
+            sub_resp.raise_for_status()
+
+            # Parse XML subtitle format
+            import xml.etree.ElementTree as ET
+            root = ET.fromstring(sub_resp.text)
+            lines = []
+            for p in root.iter("p"):
+                text = "".join(p.itertext()).strip()
+                if text and text.lower() != "[music]":
+                    lines.append(text)
+
+            if lines:
+                return " ".join(lines)
+
+        except Exception as e:
+            last_error = e
+            continue
+
+    raise Exception(f"All Invidious instances failed. Last error: {last_error}")
+
+
 def download_transcript_ytdlp(video_url: str) -> str:
     """Downloads transcript using yt-dlp, cleans it, and returns the text."""
     unique_id = str(uuid.uuid4())
@@ -314,24 +375,30 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Try youtube-transcript-api first
             transcript_text = download_transcript_api(video_url)
         except Exception as api_err:
-            logging.info(f"youtube-transcript-api failed: {api_err}. Trying yt-dlp fallback...")
+            logging.info(f"youtube-transcript-api failed: {api_err}. Trying Invidious fallback...")
             try:
-                # Fall back to yt-dlp
-                transcript_text = download_transcript_ytdlp(video_url)
-            except Exception as ytdlp_err:
-                logging.error(f"Both transcript downloaders failed. API error: {api_err}. yt-dlp error: {ytdlp_err}")
-                error_msg = (
-                    "❌ Could not download transcript automatically.\n\n"
-                    "YouTube may be blocking requests from this IP address.\n\n"
-                    "👉 **What you can do:**\n"
-                    "1. Copy & paste the script/transcript directly as a text message to this bot.\n"
-                    "2. Or upload a `.txt` file containing the script/transcript.\n\n"
-                    "Error details:\n"
-                    f"- {api_err}\n"
-                    f"- {ytdlp_err}"
-                )
-                await context.bot.send_message(chat_id=chat_id, text=error_msg, parse_mode="Markdown")
-                return
+                # Fall back to Invidious (bypasses YouTube cloud IP blocks)
+                transcript_text = download_transcript_invidious(video_url)
+            except Exception as invidious_err:
+                logging.info(f"Invidious failed: {invidious_err}. Trying yt-dlp fallback...")
+                try:
+                    # Last resort: yt-dlp
+                    transcript_text = download_transcript_ytdlp(video_url)
+                except Exception as ytdlp_err:
+                    logging.error(f"All transcript downloaders failed.")
+                    error_msg = (
+                        "❌ Could not download transcript automatically.\n\n"
+                        "YouTube is blocking requests from this server's IP address.\n\n"
+                        "👉 **What you can do:**\n"
+                        "1. Copy & paste the script/transcript directly as a text message to this bot.\n"
+                        "2. Or upload a `.txt` file containing the script/transcript.\n\n"
+                        "Error details:\n"
+                        f"- {api_err}\n"
+                        f"- {invidious_err}\n"
+                        f"- {ytdlp_err}"
+                    )
+                    await context.bot.send_message(chat_id=chat_id, text=error_msg, parse_mode="Markdown")
+                    return
             
     # Combine caption context if transcript came from file
     if caption:
