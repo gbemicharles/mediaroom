@@ -301,20 +301,83 @@ def get_language_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
+def _parse_production_pack(full_text: str) -> list[tuple[str, str]]:
+    """Parse the AI production pack into (header, body) section pairs for pretty formatting."""
+    SECTION_EMOJIS = {
+        "TITLE": "🏆", "WINNER": "🥇", "SEO": "📋", "DESCRIPTION": "📋",
+        "HASHTAG": "#️⃣", "TAG": "🏷️", "HOST SCRIPT": "🎙️", "SCRIPT": "🎙️",
+        "PHOTO PROMPT": "📸", "THUMBNAIL": "🖼️",
+    }
+
+    def emoji_for(title: str) -> str:
+        upper = title.upper()
+        for key, em in SECTION_EMOJIS.items():
+            if key in upper:
+                return em
+        return "▪️"
+
+    # Split on lines that look like  "# 1. TITLE IDEAS" or "## 1. TITLE IDEAS"
+    parts = re.split(r'\n(?=#{1,3}\s*\d+[\.\)]\s+)', full_text.strip())
+    sections = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        header_match = re.match(r'^#{1,3}\s*\d+[\.\)]\s+(.+)', part)
+        if header_match:
+            title = header_match.group(1).strip()
+            body = part[header_match.end():].strip()
+            em = emoji_for(title)
+            sections.append((f"{em} {title}", body))
+        else:
+            # Preamble / unlabeled text — skip if very short
+            if len(part) > 30:
+                sections.append(("", part))
+    return sections
+
+
+def _html(text: str) -> str:
+    """Escape text for Telegram HTML parse mode."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+async def _send_html(bot, chat_id: int, text: str):
+    """Send a message with HTML parse mode, splitting if over 4000 chars."""
+    MAX = 4000
+    if len(text) <= MAX:
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+        return
+    # Split on double newlines to avoid breaking mid-word
+    chunks, current = [], ""
+    for line in text.split("\n"):
+        if len(current) + len(line) + 1 > MAX:
+            if current:
+                await bot.send_message(chat_id=chat_id, text=current.strip(), parse_mode="HTML")
+            current = line + "\n"
+        else:
+            current += line + "\n"
+    if current.strip():
+        await bot.send_message(chat_id=chat_id, text=current.strip(), parse_mode="HTML")
+
+
 async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, transcript_text: str, target_lang: str):
     try:
         prompt_to_use = user_prompts.get(user_id, DEFAULT_PROMPT)
-        
+
         # Truncate very long transcripts — 15,000 chars is plenty for the production pack
         MAX_TRANSCRIPT_CHARS = 15000
         if len(transcript_text) > MAX_TRANSCRIPT_CHARS:
             transcript_text = transcript_text[:MAX_TRANSCRIPT_CHARS]
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"⚠️ Transcript was very long — trimmed to the first ~15,000 characters for processing."
+                text="⚠️ Transcript was very long — trimmed to the first ~15,000 characters for processing."
             )
 
-        await context.bot.send_message(chat_id=chat_id, text=f"🧠 Translating transcript & generating assets in {target_lang}...")
+        await _send_html(
+            context.bot, chat_id,
+            f"🧠 <b>Generating production pack in {_html(target_lang)}…</b>\n"
+            f"<i>Translating transcript, writing scripts, building assets — hang tight.</i>"
+        )
         logging.info(f"STEP 1: Calling AI generation. Transcript length: {len(transcript_text)} chars")
 
         full_text, image_prompt, translated_transcript = await asyncio.to_thread(
@@ -322,10 +385,10 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
         )
         logging.info(f"STEP 2: AI done. full_text={len(full_text)} chars, image_prompt={bool(image_prompt)}, transcript={len(translated_transcript)} chars")
 
-        # Send translated transcript as a file
+        # ── Translated transcript .txt ───────────────────────────────────────
         if translated_transcript:
             logging.info("STEP 3: Sending translated transcript file")
-            filename = f"transcript_{target_lang}.txt"
+            filename = f"transcript_{target_lang.replace(' ', '_')}.txt"
             filepath = os.path.join(os.getcwd(), filename)
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(translated_transcript)
@@ -335,54 +398,81 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
                         chat_id=chat_id,
                         document=f,
                         filename=filename,
-                        caption=f"📝 Translated Transcript ({target_lang})"
+                        caption=f"📄 <b>Translated &amp; Rewritten Transcript</b> — {_html(target_lang)}",
+                        parse_mode="HTML"
                     )
             except Exception as e:
-                logging.error(f"Error sending document: {e}")
-                await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Failed to send translated transcript file: {e}")
+                logging.error(f"Error sending transcript document: {e}")
+                await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Could not send transcript file: {e}")
             finally:
                 if os.path.exists(filepath):
                     os.remove(filepath)
-
-        # Send generated text assets
-        logging.info(f"STEP 4: Sending full_text ({len(full_text)} chars)")
-        if not full_text.strip():
-            await context.bot.send_message(chat_id=chat_id, text="⚠️ AI returned empty response. Please try again.")
-            return
-        if len(full_text) > 4000:
-            for i in range(0, len(full_text), 4000):
-                await context.bot.send_message(chat_id=chat_id, text=full_text[i:i+4000])
         else:
-            await context.bot.send_message(chat_id=chat_id, text=full_text)
+            logging.warning("STEP 3: No translated_transcript extracted — Claude may have run out of tokens.")
 
-        logging.info(f"STEP 5: Checking image_prompt: '{image_prompt[:60] if image_prompt else None}'")
+        # ── Production pack ──────────────────────────────────────────────────
+        logging.info(f"STEP 4: Sending production pack ({len(full_text)} chars)")
+        if not full_text.strip():
+            await context.bot.send_message(chat_id=chat_id, text="⚠️ AI returned an empty response. Please try again.")
+            return
+
+        # Header card
+        await _send_html(
+            context.bot, chat_id,
+            f"🎬 <b>PRODUCTION PACK</b> — <b>{_html(target_lang)}</b>\n"
+            f"{'─' * 28}"
+        )
+
+        sections = _parse_production_pack(full_text)
+        if sections:
+            for header, body in sections:
+                if not body.strip():
+                    continue
+                msg = (f"<b>{_html(header)}</b>\n{'─' * 20}\n{_html(body)}" if header
+                       else _html(body))
+                await _send_html(context.bot, chat_id, msg)
+        else:
+            # Fallback: send raw text if parsing found nothing
+            await _send_html(context.bot, chat_id, _html(full_text))
+
+        # ── Thumbnail ────────────────────────────────────────────────────────
+        logging.info(f"STEP 5: image_prompt present: {bool(image_prompt)}")
         if image_prompt and image_prompt != "A generic YouTube thumbnail":
-            await context.bot.send_message(chat_id=chat_id, text=f"🎨 Generating thumbnail...\n`{image_prompt}`")
+            await _send_html(
+                context.bot, chat_id,
+                f"🎨 <b>Generating thumbnail…</b>\n<i>{_html(image_prompt[:200])}</i>"
+            )
             logging.info("STEP 6: Calling FLUX Schnell")
             image_url = await asyncio.to_thread(generate_thumbnail, image_prompt)
-            logging.info(f"STEP 7: Thumbnail done. URL: {image_url[:60] if image_url else 'EMPTY'}")
+            logging.info(f"STEP 7: Thumbnail URL: {image_url[:80] if image_url else 'EMPTY'}")
 
             if image_url:
-                await context.bot.send_photo(chat_id=chat_id, photo=image_url, caption="✅ Generated Thumbnail")
+                await context.bot.send_photo(
+                    chat_id=chat_id, photo=image_url,
+                    caption="🖼️ <b>Generated Thumbnail</b>", parse_mode="HTML"
+                )
 
-                await context.bot.send_message(chat_id=chat_id, text="🎬 Generating intro video (~1 min)...")
+                await _send_html(context.bot, chat_id, "🎬 <b>Generating intro video…</b> <i>(~30–60 s)</i>")
                 logging.info("STEP 8: Calling SVD video generation")
                 video_url = await asyncio.to_thread(generate_intro_video, image_url)
-                logging.info(f"STEP 9: Video done. URL: {video_url[:60] if video_url else 'EMPTY'}")
+                logging.info(f"STEP 9: Video URL: {video_url[:80] if video_url else 'EMPTY'}")
 
                 if video_url:
-                    await context.bot.send_video(chat_id=chat_id, video=video_url, caption="✅ Generated Intro Video")
+                    await context.bot.send_video(
+                        chat_id=chat_id, video=video_url,
+                        caption="🎞️ <b>Generated Intro Video</b>", parse_mode="HTML"
+                    )
                 else:
-                    await context.bot.send_message(chat_id=chat_id, text="❌ Failed to generate intro video.")
+                    await _send_html(context.bot, chat_id, "❌ <b>Intro video generation failed.</b>")
             else:
-                await context.bot.send_message(chat_id=chat_id, text="❌ Failed to generate thumbnail.")
+                await _send_html(context.bot, chat_id, "❌ <b>Thumbnail generation failed.</b> Check Replicate billing.")
         else:
-            await context.bot.send_message(chat_id=chat_id, text="⚠️ Could not extract a thumbnail prompt from the AI's response.")
-        
+            await _send_html(context.bot, chat_id, "⚠️ <b>No thumbnail prompt found</b> in the AI response.")
+
         logging.info("STEP 10: process_transcript complete")
-            
+
     except Exception as e:
-        logging.error(f"Error in processing: {e}", exc_info=True)
+        logging.error(f"Error in process_transcript: {e}", exc_info=True)
         await context.bot.send_message(chat_id=chat_id, text=f"❌ An error occurred: {e}")
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
