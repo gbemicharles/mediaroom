@@ -5,3 +5,13 @@ python-dotenv==1.0.1
 requests==2.32.3
 yt-dlp
 google-generativeai
+youtube-transcript-api
+google-generativeai
+openai==1.35.13
+python-dotenv==1.0.1
+python-telegram-bot==21.1.1
+replicate==0.28.0
+requests==2.32.3
+telegram
+youtube-transcript-api
+yt-dlp
