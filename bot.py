@@ -8,7 +8,7 @@ import glob
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from config import check_env_vars, TELEGRAM_BOT_TOKEN, DEFAULT_PROMPT, get_webshare_proxies, WEBSHARE_PROXY_USERNAME, WEBSHARE_PROXY_PASSWORD
-from ai_services import generate_text_and_extract_prompt, generate_thumbnail, generate_intro_video, translate_chunk, split_transcript_into_chunks
+from ai_services import generate_text_and_extract_prompt, generate_thumbnail, generate_intro_video, translate_chunk, split_transcript_into_chunks, split_into_paragraphs
 
 # Setup logging
 logging.basicConfig(
@@ -495,11 +495,21 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
         pack_result = results[0]
         translated_parts = list(results[1:])   # one per chunk, in order
 
-        full_text, image_prompt, _ = pack_result   # discard pack's own translated_transcript
+        full_text, image_prompt, pack_transcript = pack_result
         logging.info(f"STEP 2: pack={len(full_text)} chars, {len(translated_parts)} translated chunks")
 
-        translated_transcript = "\n\n".join(p for p in translated_parts if p.strip())
-        logging.info(f"STEP 3: Combined transcript: {len(translated_transcript)} chars")
+        # Combine raw Haiku translations, then split into ≤999-char paragraphs
+        translated_transcript_raw = "\n\n".join(p for p in translated_parts if p.strip())
+        paragraphs = split_into_paragraphs(translated_transcript_raw, min_chars=500, max_chars=999)
+
+        # Prepend the channel intro translated by Sonnet (first paragraph of pack_transcript)
+        if pack_transcript:
+            intro = pack_transcript.split("\n\n")[0].strip()
+            if intro:
+                paragraphs.insert(0, intro)
+
+        translated_transcript = "\n\n".join(paragraphs)
+        logging.info(f"STEP 3: Combined transcript: {len(translated_transcript)} chars, {len(paragraphs)} paragraphs")
 
         # ── Translated transcript .txt ───────────────────────────────────────
         if translated_transcript.strip():
