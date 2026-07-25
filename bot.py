@@ -130,11 +130,11 @@ def download_transcript_direct(video_url: str) -> str:
     import json
     match = re.search(r'"captionTracks":(\[.*?\])', r.text)
     if not match:
-        raise Exception("No caption tracks found — video may have captions disabled.")
+        raise NoSubtitlesError("No caption tracks found — video may have captions disabled.")
 
     tracks = json.loads(match.group(1))
     if not tracks:
-        raise Exception("No caption tracks available for this video.")
+        raise NoSubtitlesError("No caption tracks available for this video.")
 
     # Prefer English; fall back to first available track
     track = next((t for t in tracks if t.get("languageCode", "").startswith("en")), tracks[0])
@@ -173,6 +173,7 @@ def download_transcript_invidious(video_url: str) -> str:
     ]
 
     last_error = None
+    no_captions_count = 0
     for instance in instances:
         try:
             # Get list of available caption tracks
@@ -183,6 +184,7 @@ def download_transcript_invidious(video_url: str) -> str:
 
             captions = data.get("captions", [])
             if not captions:
+                no_captions_count += 1
                 continue
 
             # Prefer English, fall back to first available
@@ -213,6 +215,10 @@ def download_transcript_invidious(video_url: str) -> str:
         except Exception as e:
             last_error = e
             continue
+
+    # If every reachable instance reported an empty captions list, the video has no captions
+    if no_captions_count > 0 and no_captions_count == len(instances):
+        raise NoSubtitlesError("This video has no captions available.")
 
     raise Exception(f"All Invidious instances failed. Last error: {last_error}")
 
