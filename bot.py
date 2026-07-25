@@ -5,6 +5,20 @@ import logging
 import subprocess
 import uuid
 import glob
+
+
+# ── Custom transcript-fetch exceptions ──────────────────────────────────────
+class NoSubtitlesError(Exception):
+    """Raised when a video genuinely has no subtitles/captions available."""
+
+class AgeRestrictedError(Exception):
+    """Raised when a video is age-restricted and cannot be accessed automatically."""
+
+class PrivateVideoError(Exception):
+    """Raised when a video is private or unavailable."""
+
+class RateLimitedError(Exception):
+    """Raised when YouTube is rate-limiting requests (HTTP 429)."""
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from config import check_env_vars, TELEGRAM_BOT_TOKEN, DEFAULT_PROMPT, get_webshare_proxies, WEBSHARE_PROXY_USERNAME, WEBSHARE_PROXY_PASSWORD
@@ -267,8 +281,8 @@ def download_transcript_ytapi(video_url: str) -> str:
     return ' '.join(lines)
 
 
-def _run_ytdlp(video_url: str, unique_id: str, proxy: str = None) -> list:
-    """Run yt-dlp and return list of downloaded subtitle file paths."""
+def _run_ytdlp(video_url: str, unique_id: str, proxy: str = None) -> tuple:
+    """Run yt-dlp and return (list of downloaded subtitle file paths, stderr text)."""
     temp_template = os.path.join(os.getcwd(), f"temp_{unique_id}.%(ext)s")
     cmd = [
         "yt-dlp",
@@ -283,9 +297,32 @@ def _run_ytdlp(video_url: str, unique_id: str, proxy: str = None) -> list:
     if proxy:
         cmd += ["--proxy", proxy]
     cmd.append(video_url)
-    subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    stderr = (result.stderr or "") + (result.stdout or "")
     pattern = os.path.join(os.getcwd(), f"temp_{unique_id}.*")
-    return glob.glob(pattern)
+    return glob.glob(pattern), stderr
+
+
+def _classify_ytdlp_stderr(stderr: str):
+    """Inspect yt-dlp output and raise a specific exception if a hard failure is detected.
+    Returns None when the output is ambiguous (allow caller to fall through)."""
+    s = stderr.lower()
+    # Private / unavailable
+    if any(p in s for p in ("private video", "this video is private", "video is unavailable",
+                             "has been removed", "account associated with this video")):
+        raise PrivateVideoError("This video is private or unavailable.")
+    # Age-restricted
+    if any(p in s for p in ("sign in to confirm your age", "age-restricted",
+                             "age_verification", "inappropriate for some users")):
+        raise AgeRestrictedError("This video is age-restricted.")
+    # No subtitles
+    if any(p in s for p in ("no subtitles", "there are no subtitles",
+                             "no automatic captions", "subtitles not available",
+                             "this video does not have", "couldn't find automatic captions")):
+        raise NoSubtitlesError("This video has no captions.")
+    # Rate-limited
+    if "http error 429" in s or "too many requests" in s:
+        raise RateLimitedError("YouTube is rate-limiting requests.")
 
 
 def download_transcript_ytdlp(video_url: str) -> str:
@@ -297,14 +334,20 @@ def download_transcript_ytdlp(video_url: str) -> str:
     if WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD:
         stable_proxy = f"http://{WEBSHARE_PROXY_USERNAME}:{WEBSHARE_PROXY_PASSWORD}@p.webshare.io:80"
 
-    downloaded_files = _run_ytdlp(video_url, unique_id, proxy=stable_proxy)
+    downloaded_files, stderr1 = _run_ytdlp(video_url, unique_id, proxy=stable_proxy)
 
-    # If proxy got nothing, retry without proxy (Replit IP may work fine)
+    # If proxy got nothing, classify stderr first; only retry without proxy on ambiguous errors
     if not downloaded_files and stable_proxy:
+        _classify_ytdlp_stderr(stderr1)   # raises hard errors (private, age-restricted, no-subs, 429)
         logging.info("yt-dlp with proxy got no files — retrying without proxy")
-        downloaded_files = _run_ytdlp(video_url, unique_id + "_noproxy", proxy=None)
+        downloaded_files, stderr2 = _run_ytdlp(video_url, unique_id + "_noproxy", proxy=None)
+        combined_stderr = stderr1 + "\n" + stderr2
+    else:
+        combined_stderr = stderr1
 
     if not downloaded_files:
+        # One last classification pass before raising a generic error
+        _classify_ytdlp_stderr(combined_stderr)
         raise Exception("yt-dlp failed to download subtitles: no subtitle files found")
 
     # Prefer English subtitle files; fall back to whatever was downloaded first
@@ -702,25 +745,63 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=chat_id, text="📥 Detected YouTube link. Fetching transcript — this can take up to 60 seconds, please wait…")
 
         def _fetch_transcript():
-            """Try all download methods sequentially (runs in a thread)."""
+            """Try all download methods sequentially (runs in a thread).
+            Hard errors (no subtitles, age-restricted, private) are propagated
+            immediately — no point trying other methods for those cases."""
+            # Priority queue for the most informative non-transient error seen so far
+            hard_error = None  # NoSubtitlesError / AgeRestrictedError / PrivateVideoError
+            rate_error = None  # RateLimitedError
+
             try:
                 return download_transcript_ytdlp(video_url)
+            except (NoSubtitlesError, AgeRestrictedError, PrivateVideoError) as e:
+                logging.info(f"yt-dlp hard error (not retrying): {e}")
+                raise  # no point trying other methods
+            except RateLimitedError as e:
+                rate_error = e
+                logging.info(f"yt-dlp rate-limited: {e}. Trying direct fetch...")
             except Exception as e1:
                 logging.info(f"yt-dlp failed: {e1}. Trying direct fetch...")
+
             try:
                 return download_transcript_direct(video_url)
+            except (NoSubtitlesError, AgeRestrictedError, PrivateVideoError) as e:
+                logging.info(f"Direct fetch hard error: {e}")
+                raise
+            except RateLimitedError as e:
+                rate_error = rate_error or e
+                logging.info(f"Direct fetch rate-limited: {e}. Trying Invidious...")
             except Exception as e2:
                 logging.info(f"Direct fetch failed: {e2}. Trying Invidious...")
+
             try:
                 return download_transcript_invidious(video_url)
+            except (NoSubtitlesError, AgeRestrictedError, PrivateVideoError) as e:
+                logging.info(f"Invidious hard error: {e}")
+                raise
+            except RateLimitedError as e:
+                rate_error = rate_error or e
+                logging.info(f"Invidious rate-limited: {e}. Trying ytapi...")
             except Exception as e3:
                 logging.info(f"Invidious failed: {e3}. Trying ytapi...")
+
             try:
                 return download_transcript_ytapi(video_url)
+            except (NoSubtitlesError, AgeRestrictedError, PrivateVideoError) as e:
+                logging.info(f"ytapi hard error: {e}")
+                raise
+            except RateLimitedError as e:
+                rate_error = rate_error or e
+                logging.error(f"All transcript downloaders failed (rate-limited): {e}")
             except Exception as e4:
                 logging.error(f"All transcript downloaders failed: {e4}")
+
+            # All methods exhausted — raise the most informative error
+            if rate_error:
+                raise rate_error
             return None
 
+        fetch_error = None
         try:
             transcript_text = await asyncio.wait_for(
                 asyncio.to_thread(_fetch_transcript),
@@ -728,19 +809,46 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except asyncio.TimeoutError:
             transcript_text = None
+        except (NoSubtitlesError, AgeRestrictedError, PrivateVideoError, RateLimitedError) as e:
+            fetch_error = e
+            transcript_text = None
+        except Exception as e:
+            fetch_error = e
+            transcript_text = None
 
         if not transcript_text:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    "❌ Could not download transcript automatically.\n\n"
-                    "YouTube is rate-limiting requests right now (temporary — usually resets within 1-2 hours).\n\n"
-                    "👉 In the meantime:\n"
-                    "1. Copy & paste the transcript/script as a text message.\n"
-                    "2. Or upload a .txt file with the transcript.\n\n"
-                    "In normal use (a few videos per day) this error won't appear."
+            if isinstance(fetch_error, NoSubtitlesError):
+                msg = (
+                    "📭 <b>This video has no captions.</b>\n\n"
+                    "YouTube doesn't provide subtitles for it, so automatic transcript extraction isn't possible.\n\n"
+                    "👉 Please upload a <code>.txt</code> file with the transcript, "
+                    "or copy and paste the script as a text message."
                 )
-            )
+            elif isinstance(fetch_error, AgeRestrictedError):
+                msg = (
+                    "🔞 <b>This video is age-restricted.</b>\n\n"
+                    "It can't be accessed automatically without a logged-in account.\n\n"
+                    "👉 Please upload a <code>.txt</code> file with the transcript, "
+                    "or copy and paste the script as a text message."
+                )
+            elif isinstance(fetch_error, PrivateVideoError):
+                msg = (
+                    "🔒 <b>This video is private or unavailable.</b>\n\n"
+                    "It can't be accessed because it's either private, deleted, or geo-blocked.\n\n"
+                    "👉 Please upload a <code>.txt</code> file with the transcript, "
+                    "or copy and paste the script as a text message."
+                )
+            else:
+                # Rate-limited, timeout, or unknown transient error
+                msg = (
+                    "❌ <b>Could not download transcript automatically.</b>\n\n"
+                    "YouTube is rate-limiting requests right now (temporary — usually resets within 1–2 hours).\n\n"
+                    "👉 In the meantime:\n"
+                    "1. Copy &amp; paste the transcript/script as a text message.\n"
+                    "2. Or upload a <code>.txt</code> file with the transcript.\n\n"
+                    "<i>In normal use (a few videos per day) this error won't appear.</i>"
+                )
+            await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
             return
             
     # Combine caption context if transcript came from file
