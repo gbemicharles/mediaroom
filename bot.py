@@ -274,7 +274,11 @@ def download_transcript_ytapi(video_url: str) -> str:
                     logging.warning(f"ytapi attempt {attempt+1} transient error: {e}. Retrying...")
                     import time; time.sleep(1)
                     continue
-                # For non-transient errors try fetch() directly as last resort
+                # Short-circuit on definitive hard errors — retrying or calling api.fetch() is pointless
+                if isinstance(e, (NoTranscriptFound, TranscriptsDisabled, AgeRestricted,
+                                  VideoUnavailable, VideoUnplayable, IpBlocked, RequestBlocked)):
+                    raise
+                # For other non-transient errors try fetch() directly as last resort
                 try:
                     fetched = api.fetch(video_id, languages=PREF_LANGS)
                     break
