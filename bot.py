@@ -35,18 +35,18 @@ user_prompts = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_msg = (
-        "🤖 Welcome to the YouTube Automation Bot!\n\n"
-        "Send me a `.txt` file containing your video's transcript. "
-        "You can include the YouTube link in the caption of the file.\n\n"
-        "I will generate:\n"
+        "🎬 Welcome to <b>Mediaroom</b>!\n\n"
+        "Send me a <b>YouTube link</b> or a <b>.txt transcript file</b> and I'll produce a full content pack:\n\n"
         "✅ 3 Title Ideas\n"
-        "✅ Description\n"
-        "✅ Hashtags & Tags\n"
-        "✅ A Thumbnail Image (DALL-E 3)\n"
-        "✅ A Short AI Intro Video (Replicate)\n\n"
-        "Use `/setprompt <your prompt>` to override the default instructions."
+        "✅ SEO Description\n"
+        "✅ Hashtags &amp; Tags\n"
+        "✅ AI Host Script\n"
+        "✅ Translated Transcript\n"
+        "✅ Thumbnail Image\n"
+        "✅ Short Intro Video\n\n"
+        "Use <code>/setprompt &lt;your prompt&gt;</code> to override the default instructions."
     )
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=welcome_msg)
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=welcome_msg, parse_mode="HTML")
 
 async def set_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -918,6 +918,6 @@ if __name__ == '__main__':
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
-    print("Bot is starting...")
+    print("Mediaroom bot is starting...")
     application.run_polling()
 
