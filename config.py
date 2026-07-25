@@ -7,7 +7,10 @@ load_dotenv()
 # Telegram Bot Token
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Replicate API Token (for Video generation)
+# fal.ai API Key (primary for thumbnail + video generation)
+FAL_API_KEY = os.getenv("FAL_KEY")
+
+# Replicate API Token (fallback for thumbnail + video generation)
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 
 # Gemini API Key (for Text generation)
@@ -239,5 +242,5 @@ def check_env_vars():
     if not OPENROUTER_API_KEY and not ANTHROPIC_API_KEY and not GEMINI_API_KEY:
         print("WARNING: No text generation API key found (OPENROUTER_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY). Text generation will run in MOCK MODE.")
 
-    if not REPLICATE_API_TOKEN:
-        print("WARNING: REPLICATE_API_TOKEN is missing. Thumbnail and video generation will run in MOCK MODE.")
+    if not FAL_API_KEY and not REPLICATE_API_TOKEN:
+        print("WARNING: No image/video API key found (FAL_KEY or REPLICATE_API_TOKEN). Thumbnail and video generation will run in MOCK MODE.")

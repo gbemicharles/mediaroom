@@ -4,7 +4,8 @@ import replicate
 import anthropic
 from openai import OpenAI
 import google.generativeai as genai
-from config import OPENROUTER_API_KEY, ANTHROPIC_API_KEY, REPLICATE_API_TOKEN, GEMINI_API_KEY, CHANNEL_INTRODUCTION
+import fal_client
+from config import OPENROUTER_API_KEY, ANTHROPIC_API_KEY, REPLICATE_API_TOKEN, FAL_API_KEY, GEMINI_API_KEY, CHANNEL_INTRODUCTION
 
 # Initialize clients safely
 # OpenRouter uses the OpenAI SDK format with a different base URL
@@ -285,59 +286,81 @@ A close-up studio portrait of a 45-year-old male historian with short grey hair 
     return full_text, thumbnail_prompt, final_transcript
 
 def generate_thumbnail(image_prompt: str) -> str:
-    """Calls FLUX 1.1 Pro via Replicate to generate a high-quality thumbnail and returns the URL."""
-    if not REPLICATE_API_TOKEN:
-        return "https://placehold.co/1280x720/png?text=Mock+Thumbnail"
+    """Generate a FLUX 1.1 Pro thumbnail. Uses fal.ai if key is set, falls back to Replicate."""
 
-    try:
-        output = replicate.run(
-            "black-forest-labs/flux-1.1-pro",
-            input={
-                "prompt": image_prompt,
-                "aspect_ratio": "16:9",
-                "output_format": "jpg",
-            }
-        )
-        result = output[0] if isinstance(output, list) else output
-        if hasattr(result, 'url'):
-            return str(result.url)
-        return str(result)
-    except Exception as e:
-        logging.error(f"Error generating thumbnail: {e}")
-        return ""
+    # ── fal.ai (primary) ────────────────────────────────────────────────────
+    if FAL_API_KEY:
+        try:
+            import os
+            os.environ["FAL_KEY"] = FAL_API_KEY
+            result = fal_client.subscribe(
+                "fal-ai/flux-pro/v1.1",
+                arguments={
+                    "prompt": image_prompt,
+                    "aspect_ratio": "16:9",
+                    "output_format": "jpeg",
+                },
+            )
+            return result["images"][0]["url"]
+        except Exception as e:
+            logging.error(f"fal.ai thumbnail error: {e}")
+
+    # ── Replicate (fallback) ─────────────────────────────────────────────────
+    if REPLICATE_API_TOKEN:
+        try:
+            output = replicate.run(
+                "black-forest-labs/flux-1.1-pro",
+                input={"prompt": image_prompt, "aspect_ratio": "16:9", "output_format": "jpg"},
+            )
+            result = output[0] if isinstance(output, list) else output
+            return str(result.url) if hasattr(result, "url") else str(result)
+        except Exception as e:
+            logging.error(f"Replicate thumbnail error: {e}")
+
+    return ""
+
 
 def generate_intro_video(image_url: str, image_prompt: str = "") -> str:
-    """Calls Wan 2.1 image-to-video via Replicate to generate a cinematic intro clip."""
-    if not REPLICATE_API_TOKEN:
-        return "https://www.w3schools.com/html/mov_bbb.mp4"
+    """Generate a Wan 2.1 i2v intro clip. Uses fal.ai if key is set, falls back to Replicate."""
 
-    # Build a motion prompt from the image prompt, or fall back to a generic cinematic move
-    if image_prompt:
-        motion_prompt = (
-            f"{image_prompt}. "
-            "Slow cinematic camera pull-back, volumetric atmospheric fog drifting through the scene, "
-            "dramatic golden-hour lighting, ultra-realistic, documentary style."
-        )
-    else:
-        motion_prompt = (
-            "Slow cinematic camera pull-back, volumetric atmospheric fog drifting through the scene, "
-            "dramatic golden-hour lighting, ultra-realistic historical documentary style."
-        )
+    motion_prompt = (
+        (f"{image_prompt}. " if image_prompt else "")
+        + "Slow cinematic camera pull-back, volumetric atmospheric fog drifting through the scene, "
+          "dramatic golden-hour lighting, ultra-realistic historical documentary style."
+    )
 
-    try:
-        output = replicate.run(
-            "wavespeedai/wan-2.1-i2v-480p",
-            input={
-                "image": image_url,
-                "prompt": motion_prompt,
-                "aspect_ratio": "16:9",
-                "fast_mode": "Balanced",
-            }
-        )
-        result = output[0] if isinstance(output, list) else output
-        if hasattr(result, 'url'):
-            return str(result.url)
-        return str(result)
-    except Exception as e:
-        logging.error(f"Error generating intro video: {e}")
+    # ── fal.ai (primary) ────────────────────────────────────────────────────
+    if FAL_API_KEY:
+        try:
+            import os
+            os.environ["FAL_KEY"] = FAL_API_KEY
+            result = fal_client.subscribe(
+                "fal-ai/wan-i2v",
+                arguments={
+                    "image_url": image_url,
+                    "prompt": motion_prompt,
+                },
+            )
+            return result["video"]["url"]
+        except Exception as e:
+            logging.error(f"fal.ai video error: {e}")
+
+    # ── Replicate (fallback) ─────────────────────────────────────────────────
+    if REPLICATE_API_TOKEN:
+        try:
+            output = replicate.run(
+                "wavespeedai/wan-2.1-i2v-480p",
+                input={
+                    "image": image_url,
+                    "prompt": motion_prompt,
+                    "aspect_ratio": "16:9",
+                    "fast_mode": "Balanced",
+                },
+            )
+            result = output[0] if isinstance(output, list) else output
+            return str(result.url) if hasattr(result, "url") else str(result)
+        except Exception as e:
+            logging.error(f"Replicate video error: {e}")
+
+    return ""
         return ""
