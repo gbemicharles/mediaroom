@@ -363,4 +363,3 @@ def generate_intro_video(image_url: str, image_prompt: str = "") -> str:
             logging.error(f"Replicate video error: {e}")
 
     return ""
-        return ""
