@@ -202,6 +202,51 @@ def download_transcript_invidious(video_url: str) -> str:
     raise Exception(f"All Invidious instances failed. Last error: {last_error}")
 
 
+def download_transcript_ytapi(video_url: str) -> str:
+    """Downloads transcript using youtube-transcript-api v1.2.4 with Webshare proxy."""
+    from youtube_transcript_api import YouTubeTranscriptApi
+
+    video_id = extract_video_id(video_url)
+    if not video_id:
+        raise Exception("Could not extract video ID from URL")
+
+    proxy_config = None
+    if WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD:
+        from youtube_transcript_api.proxies import WebshareProxyConfig
+        proxy_config = WebshareProxyConfig(
+            proxy_username=WEBSHARE_PROXY_USERNAME,
+            proxy_password=WEBSHARE_PROXY_PASSWORD,
+        )
+
+    api = YouTubeTranscriptApi(proxy_config=proxy_config)
+
+    PREF_LANGS = ['en', 'ro', 'de', 'fr', 'es', 'pt', 'it', 'ru', 'ar', 'uk', 'nl', 'pl', 'tr', 'zh', 'ja']
+
+    fetched = None
+    try:
+        tl = api.list(video_id)
+        try:
+            fetched = tl.find_transcript(PREF_LANGS).fetch()
+        except Exception:
+            # No preferred language found — grab whatever is first available
+            fetched = next(iter(tl)).fetch()
+    except Exception:
+        # list() itself failed — try fetch() directly
+        fetched = api.fetch(video_id, languages=PREF_LANGS)
+
+    lines = []
+    for entry in fetched:
+        text = entry.get('text', '') if isinstance(entry, dict) else getattr(entry, 'text', str(entry))
+        text = re.sub(r'\s+', ' ', text.strip())
+        if text and text.lower() not in ('[music]', '[applause]', '[laughter]'):
+            lines.append(text)
+
+    if not lines:
+        raise Exception("Transcript was empty after parsing.")
+
+    return ' '.join(lines)
+
+
 def download_transcript_ytdlp(video_url: str) -> str:
     """Downloads transcript using yt-dlp with Chrome impersonation + Webshare proxy."""
     unique_id = str(uuid.uuid4())
@@ -213,7 +258,7 @@ def download_transcript_ytdlp(video_url: str) -> str:
         "--write-auto-subs",
         "--write-subs",
         "--skip-download",
-        "--sub-langs", "en.*,ro,es,fr,de,pt,it,zh,ja,ru,ar",  # grab English + common langs
+        "--sub-langs", ".*",  # match any available language
         "-o", temp_template,
     ]
 
@@ -619,17 +664,21 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         def _fetch_transcript():
             """Try all download methods sequentially (runs in a thread)."""
             try:
-                return download_transcript_ytdlp(video_url)
+                return download_transcript_ytapi(video_url)
             except Exception as e1:
-                logging.info(f"yt-dlp failed: {e1}. Trying direct fetch...")
+                logging.info(f"ytapi failed: {e1}. Trying yt-dlp...")
+            try:
+                return download_transcript_ytdlp(video_url)
+            except Exception as e2:
+                logging.info(f"yt-dlp failed: {e2}. Trying direct fetch...")
             try:
                 return download_transcript_direct(video_url)
-            except Exception as e2:
-                logging.info(f"Direct fetch failed: {e2}. Trying Invidious...")
+            except Exception as e3:
+                logging.info(f"Direct fetch failed: {e3}. Trying Invidious...")
             try:
                 return download_transcript_invidious(video_url)
-            except Exception as e3:
-                logging.error(f"All transcript downloaders failed: {e3}")
+            except Exception as e4:
+                logging.error(f"All transcript downloaders failed: {e4}")
             return None
 
         try:
