@@ -339,6 +339,7 @@ def generate_intro_video(image_url: str, image_prompt: str = "") -> str:
                 arguments={
                     "image_url": image_url,
                     "prompt": motion_prompt,
+                    "aspect_ratio": "16:9",
                 },
             )
             return result["video"]["url"]
