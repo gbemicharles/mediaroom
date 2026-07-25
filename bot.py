@@ -689,7 +689,7 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['pending_caption'] = None
     
     if video_url:
-        await context.bot.send_message(chat_id=chat_id, text="📥 Detected YouTube link. Downloading original transcript automatically...")
+        await context.bot.send_message(chat_id=chat_id, text="📥 Detected YouTube link. Fetching transcript — this can take up to 60 seconds, please wait…")
 
         def _fetch_transcript():
             """Try all download methods sequentially (runs in a thread)."""
@@ -714,7 +714,7 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             transcript_text = await asyncio.wait_for(
                 asyncio.to_thread(_fetch_transcript),
-                timeout=60.0
+                timeout=180.0
             )
         except asyncio.TimeoutError:
             transcript_text = None
