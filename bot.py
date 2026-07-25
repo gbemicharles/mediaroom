@@ -182,6 +182,23 @@ def download_transcript_invidious(video_url: str) -> str:
             resp.raise_for_status()
             data = resp.json()
 
+            # Invidious returns {"error": "<message>"} for hard failures.
+            # Detect private / age-restricted / unavailable immediately so we
+            # don't waste time on slower fallback methods.
+            api_error = data.get("error", "")
+            if api_error:
+                err_lower = api_error.lower()
+                if any(p in err_lower for p in ("private", "unavailable", "has been removed",
+                                                  "account associated")):
+                    raise PrivateVideoError(f"This video is private or unavailable: {api_error}")
+                if any(p in err_lower for p in ("age-restricted", "age restricted",
+                                                  "sign in to confirm your age",
+                                                  "confirm your age", "inappropriate for some users")):
+                    raise AgeRestrictedError(f"This video is age-restricted: {api_error}")
+                # Other hard API errors — skip to next instance
+                last_error = Exception(f"Invidious API error: {api_error}")
+                continue
+
             captions = data.get("captions", [])
             if not captions:
                 no_captions_count += 1
@@ -212,6 +229,8 @@ def download_transcript_invidious(video_url: str) -> str:
             if lines:
                 return " ".join(lines)
 
+        except (PrivateVideoError, AgeRestrictedError, NoSubtitlesError):
+            raise  # hard errors — do not try other instances
         except Exception as e:
             last_error = e
             continue
