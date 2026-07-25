@@ -98,10 +98,11 @@ def download_transcript_direct(video_url: str) -> str:
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
     }
 
-    # Build proxy — rotating residential if available, else none
+    # Build proxy — stable (non-rotating) so the caption URL is fetched from the
+    # same exit IP that fetched the watch page (YouTube binds caption URLs to IP).
     proxies = None
     if WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD:
-        proxy_url = f"http://{WEBSHARE_PROXY_USERNAME}-rotate:{WEBSHARE_PROXY_PASSWORD}@p.webshare.io:80"
+        proxy_url = f"http://{WEBSHARE_PROXY_USERNAME}:{WEBSHARE_PROXY_PASSWORD}@p.webshare.io:80"
         proxies = {"http": proxy_url, "https": proxy_url}
 
     # Step 1: fetch the watch page
@@ -213,9 +214,12 @@ def download_transcript_ytapi(video_url: str) -> str:
     proxy_config = None
     if WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD:
         from youtube_transcript_api.proxies import WebshareProxyConfig
+        # Rotating residential pool — required because YouTube blocks static IPs.
+        # retries_when_blocked=10 means it auto-rotates to a fresh IP on each block.
         proxy_config = WebshareProxyConfig(
             proxy_username=WEBSHARE_PROXY_USERNAME,
             proxy_password=WEBSHARE_PROXY_PASSWORD,
+            retries_when_blocked=10,
         )
 
     api = YouTubeTranscriptApi(proxy_config=proxy_config)
@@ -223,16 +227,32 @@ def download_transcript_ytapi(video_url: str) -> str:
     PREF_LANGS = ['en', 'ro', 'de', 'fr', 'es', 'pt', 'it', 'ru', 'ar', 'uk', 'nl', 'pl', 'tr', 'zh', 'ja']
 
     fetched = None
-    try:
-        tl = api.list(video_id)
+    last_err = None
+    for attempt in range(3):
         try:
-            fetched = tl.find_transcript(PREF_LANGS).fetch()
-        except Exception:
-            # No preferred language found — grab whatever is first available
-            fetched = next(iter(tl)).fetch()
-    except Exception:
-        # list() itself failed — try fetch() directly
-        fetched = api.fetch(video_id, languages=PREF_LANGS)
+            tl = api.list(video_id)
+            try:
+                fetched = tl.find_transcript(PREF_LANGS).fetch()
+            except Exception:
+                fetched = next(iter(tl)).fetch()
+            break  # success
+        except Exception as e:
+            last_err = e
+            err_str = str(e)
+            # Retry only on transient connection errors; bail immediately on hard errors
+            if any(x in err_str for x in ("IncompleteRead", "Connection broken", "RemoteDisconnected", "ConnectionError")):
+                logging.warning(f"ytapi attempt {attempt+1} transient error: {e}. Retrying...")
+                import time; time.sleep(1)
+                continue
+            # For non-transient errors try fetch() directly as last resort
+            try:
+                fetched = api.fetch(video_id, languages=PREF_LANGS)
+                break
+            except Exception:
+                raise  # propagate so outer try/except catches it
+
+    if fetched is None and last_err is not None:
+        raise last_err
 
     lines = []
     for entry in fetched:
@@ -247,46 +267,56 @@ def download_transcript_ytapi(video_url: str) -> str:
     return ' '.join(lines)
 
 
-def download_transcript_ytdlp(video_url: str) -> str:
-    """Downloads transcript using yt-dlp with Chrome impersonation + Webshare proxy."""
-    unique_id = str(uuid.uuid4())
+def _run_ytdlp(video_url: str, unique_id: str, proxy: str = None) -> list:
+    """Run yt-dlp and return list of downloaded subtitle file paths."""
     temp_template = os.path.join(os.getcwd(), f"temp_{unique_id}.%(ext)s")
-
     cmd = [
         "yt-dlp",
         "--impersonate", "Chrome-136",
         "--write-auto-subs",
         "--write-subs",
         "--skip-download",
-        "--sub-langs", ".*",  # match any available language
+        "--ignore-errors",   # continue past 429s on individual subtitle variants
+        "--sub-langs", "en.*,ro,de,fr,es,pt,it,ru,ar,uk,nl,pl,tr,zh,ja,he,hi,hu,cs,sv,no,da,fi",
         "-o", temp_template,
     ]
-
-    if WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD:
-        # Plain format (no -rotate suffix) keeps the same exit IP for the whole
-        # yt-dlp process — required so the subtitle CDN URL (which is IP-bound)
-        # is fetched from the same IP that requested it.
-        stable_proxy = f"http://{WEBSHARE_PROXY_USERNAME}:{WEBSHARE_PROXY_PASSWORD}@p.webshare.io:80"
-        cmd += ["--proxy", stable_proxy]
-    else:
-        proxy_urls = get_webshare_proxies()
-        if proxy_urls:
-            cmd += ["--proxy", proxy_urls[0]]
-
+    if proxy:
+        cmd += ["--proxy", proxy]
     cmd.append(video_url)
-    
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    # Don't fail on non-zero exit — yt-dlp exits non-zero if even one subtitle
-    # variant gets a 429, even when other tracks downloaded successfully.
-        
-    # Find downloaded subtitle files (yt-dlp may exit non-zero but still write some files)
+    subprocess.run(cmd, capture_output=True, text=True)
     pattern = os.path.join(os.getcwd(), f"temp_{unique_id}.*")
-    downloaded_files = glob.glob(pattern)
+    return glob.glob(pattern)
+
+
+def download_transcript_ytdlp(video_url: str) -> str:
+    """Downloads transcript using yt-dlp with Chrome impersonation.
+    Tries with Webshare stable proxy first; retries without proxy if no files downloaded."""
+    unique_id = str(uuid.uuid4())
+
+    stable_proxy = None
+    if WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD:
+        stable_proxy = f"http://{WEBSHARE_PROXY_USERNAME}:{WEBSHARE_PROXY_PASSWORD}@p.webshare.io:80"
+
+    downloaded_files = _run_ytdlp(video_url, unique_id, proxy=stable_proxy)
+
+    # If proxy got nothing, retry without proxy (Replit IP may work fine)
+    if not downloaded_files and stable_proxy:
+        logging.info("yt-dlp with proxy got no files — retrying without proxy")
+        downloaded_files = _run_ytdlp(video_url, unique_id + "_noproxy", proxy=None)
+
     if not downloaded_files:
-        error_msg = res.stderr or res.stdout or "No subtitle files downloaded"
-        raise Exception(f"yt-dlp failed to download subtitles: {error_msg}")
-        
-    vtt_file = downloaded_files[0]
+        raise Exception("yt-dlp failed to download subtitles: no subtitle files found")
+
+    # Prefer English subtitle files; fall back to whatever was downloaded first
+    def _lang_priority(path):
+        name = os.path.basename(path).lower()
+        if ".en." in name or name.endswith(".en.vtt"):
+            return 0
+        if ".en-" in name:
+            return 1
+        return 2
+
+    vtt_file = sorted(downloaded_files, key=_lang_priority)[0]
     
     try:
         with open(vtt_file, "r", encoding="utf-8") as f:
@@ -664,19 +694,19 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         def _fetch_transcript():
             """Try all download methods sequentially (runs in a thread)."""
             try:
-                return download_transcript_ytapi(video_url)
-            except Exception as e1:
-                logging.info(f"ytapi failed: {e1}. Trying yt-dlp...")
-            try:
                 return download_transcript_ytdlp(video_url)
-            except Exception as e2:
-                logging.info(f"yt-dlp failed: {e2}. Trying direct fetch...")
+            except Exception as e1:
+                logging.info(f"yt-dlp failed: {e1}. Trying direct fetch...")
             try:
                 return download_transcript_direct(video_url)
-            except Exception as e3:
-                logging.info(f"Direct fetch failed: {e3}. Trying Invidious...")
+            except Exception as e2:
+                logging.info(f"Direct fetch failed: {e2}. Trying Invidious...")
             try:
                 return download_transcript_invidious(video_url)
+            except Exception as e3:
+                logging.info(f"Invidious failed: {e3}. Trying ytapi...")
+            try:
+                return download_transcript_ytapi(video_url)
             except Exception as e4:
                 logging.error(f"All transcript downloaders failed: {e4}")
             return None
