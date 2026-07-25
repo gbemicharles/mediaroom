@@ -225,7 +225,16 @@ def download_transcript_invidious(video_url: str) -> str:
 
 def download_transcript_ytapi(video_url: str) -> str:
     """Downloads transcript using youtube-transcript-api v1.2.4 with Webshare proxy."""
-    from youtube_transcript_api import YouTubeTranscriptApi
+    from youtube_transcript_api import (
+        YouTubeTranscriptApi,
+        NoTranscriptFound,
+        TranscriptsDisabled,
+        AgeRestricted,
+        VideoUnavailable,
+        VideoUnplayable,
+        IpBlocked,
+        RequestBlocked,
+    )
 
     video_id = extract_video_id(video_url)
     if not video_id:
@@ -246,33 +255,43 @@ def download_transcript_ytapi(video_url: str) -> str:
 
     PREF_LANGS = ['en', 'ro', 'de', 'fr', 'es', 'pt', 'it', 'ru', 'ar', 'uk', 'nl', 'pl', 'tr', 'zh', 'ja']
 
-    fetched = None
-    last_err = None
-    for attempt in range(3):
-        try:
-            tl = api.list(video_id)
+    try:
+        fetched = None
+        last_err = None
+        for attempt in range(3):
             try:
-                fetched = tl.find_transcript(PREF_LANGS).fetch()
-            except Exception:
-                fetched = next(iter(tl)).fetch()
-            break  # success
-        except Exception as e:
-            last_err = e
-            err_str = str(e)
-            # Retry only on transient connection errors; bail immediately on hard errors
-            if any(x in err_str for x in ("IncompleteRead", "Connection broken", "RemoteDisconnected", "ConnectionError")):
-                logging.warning(f"ytapi attempt {attempt+1} transient error: {e}. Retrying...")
-                import time; time.sleep(1)
-                continue
-            # For non-transient errors try fetch() directly as last resort
-            try:
-                fetched = api.fetch(video_id, languages=PREF_LANGS)
-                break
-            except Exception:
-                raise  # propagate so outer try/except catches it
+                tl = api.list(video_id)
+                try:
+                    fetched = tl.find_transcript(PREF_LANGS).fetch()
+                except Exception:
+                    fetched = next(iter(tl)).fetch()
+                break  # success
+            except Exception as e:
+                last_err = e
+                err_str = str(e)
+                # Retry only on transient connection errors; bail immediately on hard errors
+                if any(x in err_str for x in ("IncompleteRead", "Connection broken", "RemoteDisconnected", "ConnectionError")):
+                    logging.warning(f"ytapi attempt {attempt+1} transient error: {e}. Retrying...")
+                    import time; time.sleep(1)
+                    continue
+                # For non-transient errors try fetch() directly as last resort
+                try:
+                    fetched = api.fetch(video_id, languages=PREF_LANGS)
+                    break
+                except Exception:
+                    raise  # propagate so outer try/except catches it
 
-    if fetched is None and last_err is not None:
-        raise last_err
+        if fetched is None and last_err is not None:
+            raise last_err
+
+    except (NoTranscriptFound, TranscriptsDisabled) as e:
+        raise NoSubtitlesError("This video has no captions available.") from e
+    except AgeRestricted as e:
+        raise AgeRestrictedError("This video is age-restricted.") from e
+    except (VideoUnavailable, VideoUnplayable) as e:
+        raise PrivateVideoError("This video is private or unavailable.") from e
+    except (IpBlocked, RequestBlocked) as e:
+        raise RateLimitedError("YouTube is rate-limiting requests.") from e
 
     lines = []
     for entry in fetched:
