@@ -9,3 +9,4 @@ yt-dlp
 google-generativeai
 youtube-transcript-api
 telegram
+gTTS
