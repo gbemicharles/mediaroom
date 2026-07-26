@@ -721,8 +721,8 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
         await _send_html(
             context.bot, chat_id,
             "🎬 <b>Generating intro video…</b>\n"
-            "<i>This takes 5–8 minutes (AI animation + lip sync). "
-            "Thumbnail and video are generating simultaneously — you'll receive both automatically.</i>"
+            "<i>Thumbnail and video are generating simultaneously. "
+            "Intro video usually ready in 1–2 minutes.</i>"
         )
 
         async def _gen_thumbnail():

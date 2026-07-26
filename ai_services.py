@@ -5,7 +5,7 @@ import anthropic
 from openai import OpenAI
 import google.generativeai as genai
 import fal_client
-from config import OPENROUTER_API_KEY, ANTHROPIC_API_KEY, REPLICATE_API_TOKEN, FAL_API_KEY, GEMINI_API_KEY, CHANNEL_INTRODUCTION, OPENAI_API_KEY
+from config import OPENROUTER_API_KEY, ANTHROPIC_API_KEY, REPLICATE_API_TOKEN, FAL_API_KEY, GEMINI_API_KEY, CHANNEL_INTRODUCTION, OPENAI_API_KEY, HEYGEN_API_KEY
 
 # Initialize clients safely
 # OpenRouter uses the OpenAI SDK format with a different base URL
@@ -458,21 +458,20 @@ def generate_thumbnail(image_prompt: str, hook_text: str = "") -> str:
 
 
 def generate_intro_video(intro_text: str, target_lang: str) -> str:
-    """Generate a 10-second talking-head intro video: gesture + expression + lip sync.
+    """Generate a 10-second talking-head intro video via HeyGen.
 
     Pipeline:
-      1. LLM condenses intro_text to a ~10 s spoken script in target_lang.
+      1. LLM condenses intro_text to ~10 s spoken script in target_lang.
       2. gTTS → audio file.
-      3. Upload host photo → Kling i2v (10 s, gesture/expression prompt).
-      4. sync-lipsync overlays accurate mouth sync onto the Kling video.
-      5. Return final video URL.
+      3. Upload host photo + audio to HeyGen asset storage.
+      4. Submit HeyGen talking-photo video job.
+      5. Poll until complete (max 3 min) → return video URL.
     """
     import os
-    import subprocess
+    import time
     import tempfile
-    import concurrent.futures
+    import requests
 
-    # ── Language maps ─────────────────────────────────────────────────────────
     LANG_CODE = {
         "English": "en", "Spanish": "es", "French": "fr", "German": "de",
         "Portuguese": "pt", "Italian": "it", "Chinese": "zh", "Japanese": "ja",
@@ -493,12 +492,15 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         logging.error(f"Host photo not found for lang '{lang_code}'")
         return ""
 
-    # ── Step 1: LLM → 10-second script in target language ────────────────────
-    # The LLM captures the spirit of intro_text and writes ~25 words (~10 s spoken)
-    # naturally in the target language — warm, inviting, storyteller register.
+    if not HEYGEN_API_KEY:
+        logging.error("HEYGEN_API_KEY not set")
+        return ""
+
+    HEYGEN_HEADERS = {"x-api-key": HEYGEN_API_KEY, "Content-Type": "application/json"}
+
+    # ── Step 1: LLM → concise 10-second script in target language ────────────
     condensed_script = ""
     try:
-        client = openrouter_client or anthropic_client
         if openrouter_client:
             resp = openrouter_client.chat.completions.create(
                 model="google/gemini-2.5-flash",
@@ -507,9 +509,9 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
                     {
                         "role": "system",
                         "content": (
-                            f"You are a warm, storytelling YouTube host writing a 10-second channel intro "
-                            f"in {target_lang}. Capture the spirit of the reference text below. "
-                            f"Write exactly 20–28 words — no more. Natural spoken language, calming and inviting. "
+                            f"You are a warm, storytelling YouTube host writing a 10-second spoken intro "
+                            f"in {target_lang}. Capture the spirit of the reference text. "
+                            f"Write exactly 20–28 words — no more. Calming, inviting, natural speech. "
                             f"Output ONLY the final script, nothing else."
                         ),
                     },
@@ -522,9 +524,9 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
                 model="claude-3-5-haiku-20241022",
                 max_tokens=120,
                 system=(
-                    f"You are a warm, storytelling YouTube host writing a 10-second channel intro "
-                    f"in {target_lang}. Capture the spirit of the reference text below. "
-                    f"Write exactly 20–28 words — no more. Natural spoken language, calming and inviting. "
+                    f"You are a warm, storytelling YouTube host writing a 10-second spoken intro "
+                    f"in {target_lang}. Capture the spirit of the reference text. "
+                    f"Write exactly 20–28 words — no more. Calming, inviting, natural speech. "
                     f"Output ONLY the final script, nothing else."
                 ),
                 messages=[{"role": "user", "content": intro_text}],
@@ -534,12 +536,11 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
     except Exception as e:
         logging.error(f"LLM condensation failed: {e}")
 
-    # Fallback: first 25 words of the original text
     if not condensed_script:
         condensed_script = " ".join(intro_text.split()[:25])
-        logging.info(f"Using fallback intro script: {condensed_script!r}")
+        logging.info(f"Fallback script: {condensed_script!r}")
 
-    # ── Step 2: gTTS → audio ──────────────────────────────────────────────────
+    # ── Step 2: gTTS → audio file ─────────────────────────────────────────────
     audio_path = None
     try:
         from gtts import gTTS
@@ -553,116 +554,89 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         logging.error(f"gTTS failed: {e}")
         return ""
 
-    if not FAL_API_KEY:
-        logging.error("FAL_API_KEY not set")
-        try:
-            os.unlink(audio_path)
-        except Exception:
-            pass
+    try:
+        # ── Step 3: Upload photo + audio to HeyGen asset storage ─────────────
+        def _upload_asset(file_path: str, content_type: str) -> str:
+            with open(file_path, "rb") as f:
+                r = requests.post(
+                    "https://upload.heygen.com/v1/asset",
+                    headers={"x-api-key": HEYGEN_API_KEY, "Content-Type": content_type},
+                    data=f,
+                    timeout=60,
+                )
+            r.raise_for_status()
+            data = r.json().get("data", {})
+            asset_id = data.get("id") or data.get("asset_id", "")
+            if not asset_id:
+                raise ValueError(f"No asset ID in response: {r.text[:200]}")
+            return asset_id
+
+        logging.info("Uploading photo to HeyGen…")
+        photo_asset_id = _upload_asset(photo_path, "image/jpeg")
+        logging.info(f"Photo asset ID: {photo_asset_id}")
+
+        logging.info("Uploading audio to HeyGen…")
+        audio_asset_id = _upload_asset(audio_path, "audio/mpeg")
+        logging.info(f"Audio asset ID: {audio_asset_id}")
+
+        # ── Step 4: Submit talking-photo video job ────────────────────────────
+        payload = {
+            "video_inputs": [
+                {
+                    "character": {
+                        "type": "talking_photo",
+                        "talking_photo_id": photo_asset_id,
+                    },
+                    "voice": {
+                        "type": "audio",
+                        "audio_asset_id": audio_asset_id,
+                    },
+                }
+            ],
+            "dimension": {"width": 1280, "height": 720},
+        }
+        logging.info("Submitting HeyGen video job…")
+        r = requests.post(
+            "https://api.heygen.com/v2/video/generate",
+            headers=HEYGEN_HEADERS,
+            json=payload,
+            timeout=30,
+        )
+        r.raise_for_status()
+        video_id = r.json().get("data", {}).get("video_id", "")
+        if not video_id:
+            logging.error(f"HeyGen returned no video_id: {r.text[:300]}")
+            return ""
+        logging.info(f"HeyGen video_id: {video_id}")
+
+        # ── Step 5: Poll until complete (max 3 minutes) ───────────────────────
+        deadline = time.time() + 180
+        while time.time() < deadline:
+            time.sleep(5)
+            sr = requests.get(
+                f"https://api.heygen.com/v1/video_status.get?video_id={video_id}",
+                headers={"x-api-key": HEYGEN_API_KEY},
+                timeout=15,
+            )
+            sr.raise_for_status()
+            status_data = sr.json().get("data", {})
+            status = status_data.get("status", "")
+            logging.info(f"HeyGen status: {status}")
+
+            if status == "completed":
+                video_url = status_data.get("video_url", "")
+                logging.info(f"HeyGen video ready: {video_url[:80]}")
+                return video_url
+            elif status == "failed":
+                logging.error(f"HeyGen job failed: {status_data.get('error', 'unknown error')}")
+                return ""
+            # still processing — keep polling
+
+        logging.error("HeyGen polling timed out after 3 minutes")
         return ""
 
-    def _subscribe(model, args):
-        return fal_client.subscribe(model, arguments=args)
-
-    try:
-        os.environ["FAL_KEY"] = FAL_API_KEY
-
-        photo_url = fal_client.upload_file(photo_path)
-        audio_url = fal_client.upload_file(audio_path)
-        logging.info(f"Uploaded photo → {photo_url[:60]}")
-        logging.info(f"Uploaded audio → {audio_url[:60]}")
-
-        # ── Step 3: Kling i2v — 10 s of gesture + expression ─────────────────
-        logging.info("Starting Kling i2v (timeout 5 min)…")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(_subscribe, "fal-ai/kling-video/v1.6/standard/image-to-video", {
-                "image_url": photo_url,
-                "prompt": (
-                    "Charismatic storyteller speaking directly to camera with natural authority. "
-                    "Expressive hand gestures that emphasise each phrase, warm genuine smile, "
-                    "eyebrows raised with curiosity and warmth, slight head tilt and nods, "
-                    "natural body movement as if inviting the viewer into a story, "
-                    "lips moving in clear speech rhythm, cinematic golden-hour lighting"
-                ),
-                "duration": "10",
-                "aspect_ratio": "16:9",
-            })
-            try:
-                kling_result = fut.result(timeout=300)
-            except concurrent.futures.TimeoutError:
-                logging.error("Kling i2v timed out after 5 min")
-                return ""
-
-        kling_url = (
-            kling_result.get("video", {}).get("url", "")
-            or kling_result.get("video_url", "")
-            or (kling_result.get("video") if isinstance(kling_result.get("video"), str) else "")
-            or ""
-        )
-        if not kling_url:
-            logging.error(f"Kling returned no video URL. Keys: {list(kling_result.keys())}")
-            return ""
-        logging.info(f"Kling video (silent): {kling_url[:80]}")
-
-        # ── Step 4: sync-lipsync — accurate mouth sync onto Kling video ───────
-        logging.info("Starting sync-lipsync (timeout 3 min)…")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(_subscribe, "fal-ai/sync-lipsync", {
-                "video_url": kling_url,
-                "audio_url": audio_url,
-                "model": "lipsync-1.9.0-beta",
-                "sync_mode": "bounce",
-                "output_format": "mp4",
-            })
-            try:
-                lipsync_result = fut.result(timeout=180)
-            except concurrent.futures.TimeoutError:
-                logging.error("sync-lipsync timed out — falling back to Kling+merged audio")
-                lipsync_result = None
-
-        if lipsync_result:
-            out_url = (
-                lipsync_result.get("video", {}).get("url", "")
-                or lipsync_result.get("video_url", "")
-                or (lipsync_result.get("video") if isinstance(lipsync_result.get("video"), str) else "")
-                or ""
-            )
-            if out_url:
-                logging.info(f"Final lip-synced video: {out_url[:80]}")
-                return out_url
-            logging.warning("sync-lipsync returned no URL — falling back to Kling+merged audio")
-
-        # Fallback: merge audio directly onto the Kling video via ffmpeg
-        import urllib.request
-        kling_tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-        kling_tmp.close()
-        merged_tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-        merged_tmp.close()
-        try:
-            urllib.request.urlretrieve(kling_url, kling_tmp.name)
-            subprocess.run(
-                [
-                    "ffmpeg", "-y",
-                    "-i", kling_tmp.name,
-                    "-i", audio_path,
-                    "-map", "0:v", "-map", "1:a",
-                    "-c:v", "copy", "-c:a", "aac",
-                    "-shortest", merged_tmp.name,
-                ],
-                check=True, capture_output=True,
-            )
-            out_url = fal_client.upload_file(merged_tmp.name)
-            logging.info(f"Fallback merged video uploaded: {out_url[:80]}")
-            return out_url
-        finally:
-            for p in (kling_tmp.name, merged_tmp.name):
-                try:
-                    os.unlink(p)
-                except Exception:
-                    pass
-
     except Exception as e:
-        logging.error(f"Intro video error: {e}")
+        logging.error(f"HeyGen intro video error: {e}")
         return ""
     finally:
         if audio_path and os.path.exists(audio_path):

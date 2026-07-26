@@ -7,8 +7,11 @@ load_dotenv()
 # Telegram Bot Token
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# fal.ai API Key (primary for thumbnail + video generation)
+# fal.ai API Key (primary for thumbnail generation)
 FAL_API_KEY = os.getenv("FAL_KEY")
+
+# HeyGen API Key (talking-head intro video)
+HEYGEN_API_KEY = os.getenv("HEYGEN_API_KEY")
 
 # Replicate API Token (fallback for thumbnail + video generation)
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
