@@ -729,7 +729,7 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             if not has_thumbnail_prompt:
                 return ""
             logging.info("STEP 6: Calling generate_thumbnail (parallel)")
-            url = await asyncio.to_thread(generate_thumbnail, image_prompt)
+            url = await asyncio.to_thread(generate_thumbnail, image_prompt, hook_text)
             logging.info(f"STEP 6 done: {url[:80] if url else 'EMPTY'}")
             return url
 

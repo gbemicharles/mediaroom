@@ -382,14 +382,26 @@ def _burn_hook_text(image_url: str, hook_text: str) -> str:
         gap          = max(4, font_size // 8)
         block_h      = sum(line_heights) + gap * (len(lines) - 1)
 
-        # Position: 6% from top
-        y_start = int(H * 0.06)
-        outline = max(3, font_size // 10)
+        # Position: bottom quarter of the image (more cinematic, less obtrusive)
+        pad     = int(H * 0.04)
+        y_start = H - block_h - pad
+        outline = max(2, font_size // 14)   # thinner outline — more elegant
+
+        # Draw a subtle semi-transparent dark bar behind the text
+        from PIL import Image as _PIL_Image
+        bar_y0 = y_start - pad
+        bar_y1 = y_start + block_h + pad
+        overlay = _PIL_Image.new("RGBA", img.size, (0, 0, 0, 0))
+        from PIL import ImageDraw as _ImageDraw
+        ov_draw = _ImageDraw.Draw(overlay)
+        ov_draw.rectangle([(0, bar_y0), (W, bar_y1)], fill=(0, 0, 0, 140))
+        img = _PIL_Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+        draw = ImageDraw.Draw(img)
 
         for i, line in enumerate(lines):
             x = (W - line_widths[i]) // 2
             y = y_start + sum(line_heights[:i]) + gap * i
-            # Black outline
+            # Thin black outline
             for dx in range(-outline, outline + 1):
                 for dy in range(-outline, outline + 1):
                     if dx or dy:
@@ -579,31 +591,26 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         audio_asset_id = _upload_asset(audio_path, "audio/mpeg")
         logging.info(f"Audio asset ID: {audio_asset_id}")
 
-        # ── Step 4: Submit talking-photo video job ────────────────────────────
+        # ── Step 4: Submit video job via v3 API ──────────────────────────────
         payload = {
-            "video_inputs": [
-                {
-                    "character": {
-                        "type": "talking_photo",
-                        "talking_photo_id": photo_asset_id,
-                    },
-                    "voice": {
-                        "type": "audio",
-                        "audio_asset_id": audio_asset_id,
-                    },
-                }
-            ],
-            "dimension": {"width": 1280, "height": 720},
+            "type": "image",
+            "image": {
+                "type": "asset_id",
+                "asset_id": photo_asset_id,
+            },
+            "audio_asset_id": audio_asset_id,
+            "aspect_ratio": "16:9",
         }
-        logging.info("Submitting HeyGen video job…")
+        logging.info("Submitting HeyGen v3 video job…")
         r = requests.post(
-            "https://api.heygen.com/v2/video/generate",
+            "https://api.heygen.com/v3/videos",
             headers=HEYGEN_HEADERS,
             json=payload,
             timeout=30,
         )
         r.raise_for_status()
-        video_id = r.json().get("data", {}).get("video_id", "")
+        resp_data = r.json().get("data", {})
+        video_id = resp_data.get("video_id", "")
         if not video_id:
             logging.error(f"HeyGen returned no video_id: {r.text[:300]}")
             return ""
@@ -614,8 +621,8 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         while time.time() < deadline:
             time.sleep(5)
             sr = requests.get(
-                f"https://api.heygen.com/v1/video_status.get?video_id={video_id}",
-                headers={"x-api-key": HEYGEN_API_KEY},
+                f"https://api.heygen.com/v3/videos/{video_id}",
+                headers={"X-Api-Key": HEYGEN_API_KEY},
                 timeout=15,
             )
             sr.raise_for_status()
@@ -628,7 +635,8 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
                 logging.info(f"HeyGen video ready: {video_url[:80]}")
                 return video_url
             elif status == "failed":
-                logging.error(f"HeyGen job failed: {status_data.get('error', 'unknown error')}")
+                reason = status_data.get("error", {})
+                logging.error(f"HeyGen job failed: {reason}")
                 return ""
             # still processing — keep polling
 
