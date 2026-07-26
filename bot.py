@@ -787,6 +787,7 @@ def _check_video_url(url: str) -> dict:
 
     output = (result.stdout or "") + "\n" + (result.stderr or "")
     low = output.lower()
+    logging.info(f"_check_video_url rc={result.returncode} output_preview={output[:300]!r}")
 
     # Hard errors — video exists on the platform but can't be used
     if any(p in low for p in ("private video", "this video is private",
@@ -798,26 +799,30 @@ def _check_video_url(url: str) -> dict:
                                "age_verification", "inappropriate for some users")):
         return {'supported': True, 'has_captions': False, 'error': 'age_restricted'}
 
-    # Unsupported / unrecognised URL
+    # Unsupported / unrecognised URL (yt-dlp says so explicitly)
     if "unsupported url" in low or "is not a valid url" in low:
         return {'supported': False, 'has_captions': False, 'error': 'unsupported'}
 
-    # Generic error with no caption info at all → treat as unsupported
-    if result.returncode != 0 and "error" in low and "subtitle" not in low and "caption" not in low:
+    # Any other non-zero exit with no caption info → treat as unsupported
+    if result.returncode != 0 and "subtitle" not in low and "caption" not in low:
         return {'supported': False, 'has_captions': False, 'error': 'unsupported'}
 
     # Explicit "no captions"
     if any(p in low for p in ("has no subtitles", "no subtitles", "no automatic captions",
-                               "subtitles not available", "does not have captions")):
+                               "subtitles not available", "does not have captions",
+                               "couldn't find automatic captions")):
         return {'supported': True, 'has_captions': False, 'error': 'no_captions'}
 
-    # Captions found
+    # Captions confirmed — yt-dlp printed a subtitle/caption listing
     if any(p in low for p in ("available subtitles", "available automatic captions",
-                               "language  formats", "language formats")):
+                               "language  formats", "language formats",
+                               "[info]" )) and any(
+            ext in low for ext in (".vtt", ".srt", ".ttml", ".srv", "vtt\n", "srt\n")):
         return {'supported': True, 'has_captions': True, 'error': ''}
 
-    # Ambiguous output but no error — let the main fetch attempt it
-    return {'supported': True, 'has_captions': True, 'error': ''}
+    # Nothing confirmed either way → reject conservatively
+    logging.info("_check_video_url: no caption confirmation found — rejecting conservatively")
+    return {'supported': False, 'has_captions': False, 'error': 'unsupported'}
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
