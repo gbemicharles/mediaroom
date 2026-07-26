@@ -662,21 +662,35 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             filepath = os.path.join(os.getcwd(), filename)
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(translated_transcript)
-            try:
-                with open(filepath, "rb") as f:
-                    await context.bot.send_document(
-                        chat_id=chat_id,
-                        document=f,
-                        filename=filename,
-                        caption=f"📄 <b>Translated &amp; Rewritten Transcript</b> — {_html(target_lang)}",
-                        parse_mode="HTML"
-                    )
-            except Exception as e:
-                logging.error(f"Error sending transcript document: {e}")
-                await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Could not send transcript file: {e}")
-            finally:
-                if os.path.exists(filepath):
-                    os.remove(filepath)
+            sent = False
+            for attempt in range(1, 4):
+                try:
+                    with open(filepath, "rb") as f:
+                        await context.bot.send_document(
+                            chat_id=chat_id,
+                            document=f,
+                            filename=filename,
+                            caption=f"📄 <b>Translated &amp; Rewritten Transcript</b> — {_html(target_lang)}",
+                            parse_mode="HTML",
+                            read_timeout=60,
+                            write_timeout=60,
+                            connect_timeout=30,
+                        )
+                    sent = True
+                    break
+                except Exception as e:
+                    logging.warning(f"Transcript send attempt {attempt} failed: {e}")
+                    if attempt < 3:
+                        await asyncio.sleep(3)
+            if os.path.exists(filepath):
+                os.remove(filepath)
+            if not sent:
+                # File upload failed after retries — send as chunked text instead
+                logging.error("All transcript file-send attempts failed; falling back to text")
+                await _send_html(context.bot, chat_id,
+                    f"📄 <b>Translated Transcript</b> — {_html(target_lang)}\n"
+                    f"<i>(File upload failed; sending as text)</i>")
+                await _send_html(context.bot, chat_id, _html(translated_transcript))
         else:
             logging.warning("STEP 3: No translated transcript — chunk 1 may have run out of tokens.")
 
