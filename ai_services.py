@@ -458,25 +458,32 @@ def generate_thumbnail(image_prompt: str, hook_text: str = "") -> str:
 
 
 def generate_intro_video(intro_text: str, target_lang: str) -> str:
-    """Generate a talking-head intro video with natural expressions and gestures.
+    """Generate a 10-second talking-head intro video: gesture + expression + lip sync.
 
     Pipeline:
-      1. Pick the culturally-styled host photo for the target language.
-      2. Trim intro_text to ≤18 words (≈8 s of speech).
-      3. Generate TTS audio (gTTS) and hard-trim to 8 s with ffmpeg.
-      4. Upload photo + audio to fal.ai storage.
-      5. Run fal-ai/hedra-character-2 → expressive video with gestures matching speech.
+      1. LLM condenses intro_text to a ~10 s spoken script in target_lang.
+      2. gTTS → audio file.
+      3. Upload host photo → Kling i2v (10 s, gesture/expression prompt).
+      4. sync-lipsync overlays accurate mouth sync onto the Kling video.
+      5. Return final video URL.
     """
     import os
     import subprocess
     import tempfile
+    import concurrent.futures
 
-    # ── Language → host photo ────────────────────────────────────────────────
+    # ── Language maps ─────────────────────────────────────────────────────────
     LANG_CODE = {
         "English": "en", "Spanish": "es", "French": "fr", "German": "de",
         "Portuguese": "pt", "Italian": "it", "Chinese": "zh", "Japanese": "ja",
         "Russian": "ru", "Polish": "pl", "Romanian": "ro", "Turkish": "tr",
     }
+    GTTS_LANG = {
+        "English": "en", "Spanish": "es", "French": "fr", "German": "de",
+        "Portuguese": "pt", "Italian": "it", "Chinese": "zh-CN", "Japanese": "ja",
+        "Russian": "ru", "Polish": "pl", "Romanian": "ro", "Turkish": "tr",
+    }
+
     lang_code = LANG_CODE.get(target_lang, "en")
     base_dir = os.path.dirname(os.path.abspath(__file__))
     photo_path = os.path.join(base_dir, "host_photos", f"{lang_code}.jpg")
@@ -486,32 +493,76 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         logging.error(f"Host photo not found for lang '{lang_code}'")
         return ""
 
-    # ── Step 1: Full TTS — no word or time cap ───────────────────────────────
-    GTTS_LANG = {
-        "English": "en", "Spanish": "es", "French": "fr", "German": "de",
-        "Portuguese": "pt", "Italian": "it", "Chinese": "zh-CN", "Japanese": "ja",
-        "Russian": "ru", "Polish": "pl", "Romanian": "ro", "Turkish": "tr",
-    }
+    # ── Step 1: LLM → 10-second script in target language ────────────────────
+    # The LLM captures the spirit of intro_text and writes ~25 words (~10 s spoken)
+    # naturally in the target language — warm, inviting, storyteller register.
+    condensed_script = ""
+    try:
+        client = openrouter_client or anthropic_client
+        if openrouter_client:
+            resp = openrouter_client.chat.completions.create(
+                model="google/gemini-2.5-flash",
+                max_tokens=120,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            f"You are a warm, storytelling YouTube host writing a 10-second channel intro "
+                            f"in {target_lang}. Capture the spirit of the reference text below. "
+                            f"Write exactly 20–28 words — no more. Natural spoken language, calming and inviting. "
+                            f"Output ONLY the final script, nothing else."
+                        ),
+                    },
+                    {"role": "user", "content": intro_text},
+                ],
+            )
+            condensed_script = resp.choices[0].message.content.strip()
+        elif anthropic_client:
+            resp = anthropic_client.messages.create(
+                model="claude-3-5-haiku-20241022",
+                max_tokens=120,
+                system=(
+                    f"You are a warm, storytelling YouTube host writing a 10-second channel intro "
+                    f"in {target_lang}. Capture the spirit of the reference text below. "
+                    f"Write exactly 20–28 words — no more. Natural spoken language, calming and inviting. "
+                    f"Output ONLY the final script, nothing else."
+                ),
+                messages=[{"role": "user", "content": intro_text}],
+            )
+            condensed_script = resp.content[0].text.strip()
+        logging.info(f"Condensed intro ({target_lang}, {len(condensed_script.split())} words): {condensed_script!r}")
+    except Exception as e:
+        logging.error(f"LLM condensation failed: {e}")
 
+    # Fallback: first 25 words of the original text
+    if not condensed_script:
+        condensed_script = " ".join(intro_text.split()[:25])
+        logging.info(f"Using fallback intro script: {condensed_script!r}")
+
+    # ── Step 2: gTTS → audio ──────────────────────────────────────────────────
     audio_path = None
     try:
         from gtts import gTTS
         gtts_lang = GTTS_LANG.get(target_lang, "en")
-        tts = gTTS(text=intro_text, lang=gtts_lang, slow=False)
+        tts = gTTS(text=condensed_script, lang=gtts_lang, slow=False)
         audio_tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
         tts.save(audio_tmp.name)
         audio_path = audio_tmp.name
-        logging.info(f"TTS (gTTS/{gtts_lang}) saved: {audio_path}")
+        logging.info(f"TTS saved ({gtts_lang}): {audio_path}")
     except Exception as e:
         logging.error(f"gTTS failed: {e}")
         return ""
 
-    # ── Step 2: Upload photo + audio; run Hedra Character 2 ──────────────────
     if not FAL_API_KEY:
-        logging.error("FAL_API_KEY not set — cannot run Hedra")
-        if audio_path and os.path.exists(audio_path):
+        logging.error("FAL_API_KEY not set")
+        try:
             os.unlink(audio_path)
+        except Exception:
+            pass
         return ""
+
+    def _subscribe(model, args):
+        return fal_client.subscribe(model, arguments=args)
 
     try:
         os.environ["FAL_KEY"] = FAL_API_KEY
@@ -521,32 +572,25 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         logging.info(f"Uploaded photo → {photo_url[:60]}")
         logging.info(f"Uploaded audio → {audio_url[:60]}")
 
-        import concurrent.futures
-        KLING_TIMEOUT = 300  # 5 minutes — Kling i2v typically takes 2-4 min
-
-        def _subscribe(model, args):
-            return fal_client.subscribe(model, arguments=args)
-
-        # Single step: Kling i2v animates the host photo with gestures, expressions,
-        # and natural speech-like mouth movement. Skipping a second lipsync pass keeps
-        # the pipeline reliable (one slow model instead of two sequential slow models).
+        # ── Step 3: Kling i2v — 10 s of gesture + expression ─────────────────
         logging.info("Starting Kling i2v (timeout 5 min)…")
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
             fut = ex.submit(_subscribe, "fal-ai/kling-video/v1.6/standard/image-to-video", {
                 "image_url": photo_url,
                 "prompt": (
-                    "Person speaking directly to the camera with warm, natural delivery. "
-                    "Lips moving in realistic speech rhythm, expressive eyes and eyebrows, "
-                    "gentle hand gestures that underscore the words, subtle head movement, "
-                    "authentic emotional engagement, cinematic golden-hour lighting"
+                    "Charismatic storyteller speaking directly to camera with natural authority. "
+                    "Expressive hand gestures that emphasise each phrase, warm genuine smile, "
+                    "eyebrows raised with curiosity and warmth, slight head tilt and nods, "
+                    "natural body movement as if inviting the viewer into a story, "
+                    "lips moving in clear speech rhythm, cinematic golden-hour lighting"
                 ),
                 "duration": "10",
                 "aspect_ratio": "16:9",
             })
             try:
-                kling_result = fut.result(timeout=KLING_TIMEOUT)
+                kling_result = fut.result(timeout=300)
             except concurrent.futures.TimeoutError:
-                logging.error("Kling i2v timed out after 5 minutes — aborting intro video")
+                logging.error("Kling i2v timed out after 5 min")
                 return ""
 
         kling_url = (
@@ -556,39 +600,59 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
             or ""
         )
         if not kling_url:
-            logging.error(f"Kling returned no video URL. Result keys: {list(kling_result.keys())}")
+            logging.error(f"Kling returned no video URL. Keys: {list(kling_result.keys())}")
             return ""
-        logging.info(f"Kling silent video: {kling_url[:80]}")
+        logging.info(f"Kling video (silent): {kling_url[:80]}")
 
-        # ── Step 3: Download Kling video; loop it to audio length; merge audio ─
+        # ── Step 4: sync-lipsync — accurate mouth sync onto Kling video ───────
+        logging.info("Starting sync-lipsync (timeout 3 min)…")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_subscribe, "fal-ai/sync-lipsync", {
+                "video_url": kling_url,
+                "audio_url": audio_url,
+                "model": "lipsync-1.9.0-beta",
+                "sync_mode": "bounce",
+                "output_format": "mp4",
+            })
+            try:
+                lipsync_result = fut.result(timeout=180)
+            except concurrent.futures.TimeoutError:
+                logging.error("sync-lipsync timed out — falling back to Kling+merged audio")
+                lipsync_result = None
+
+        if lipsync_result:
+            out_url = (
+                lipsync_result.get("video", {}).get("url", "")
+                or lipsync_result.get("video_url", "")
+                or (lipsync_result.get("video") if isinstance(lipsync_result.get("video"), str) else "")
+                or ""
+            )
+            if out_url:
+                logging.info(f"Final lip-synced video: {out_url[:80]}")
+                return out_url
+            logging.warning("sync-lipsync returned no URL — falling back to Kling+merged audio")
+
+        # Fallback: merge audio directly onto the Kling video via ffmpeg
         import urllib.request
-        import shutil
-
         kling_tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
         kling_tmp.close()
         merged_tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
         merged_tmp.close()
         try:
             urllib.request.urlretrieve(kling_url, kling_tmp.name)
-            logging.info(f"Downloaded Kling video → {kling_tmp.name}")
-
-            # Loop the silent video indefinitely; stop when audio track ends (-shortest)
             subprocess.run(
                 [
                     "ffmpeg", "-y",
-                    "-stream_loop", "-1", "-i", kling_tmp.name,
+                    "-i", kling_tmp.name,
                     "-i", audio_path,
                     "-map", "0:v", "-map", "1:a",
-                    "-c:v", "libx264", "-c:a", "aac",
-                    "-shortest",
-                    merged_tmp.name,
+                    "-c:v", "copy", "-c:a", "aac",
+                    "-shortest", merged_tmp.name,
                 ],
                 check=True, capture_output=True,
             )
-            logging.info(f"Audio merged → {merged_tmp.name}")
-
             out_url = fal_client.upload_file(merged_tmp.name)
-            logging.info(f"Final video uploaded: {out_url[:80]}")
+            logging.info(f"Fallback merged video uploaded: {out_url[:80]}")
             return out_url
         finally:
             for p in (kling_tmp.name, merged_tmp.name):
@@ -596,8 +660,9 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
                     os.unlink(p)
                 except Exception:
                     pass
+
     except Exception as e:
-        logging.error(f"fal.ai intro video error: {e}")
+        logging.error(f"Intro video error: {e}")
         return ""
     finally:
         if audio_path and os.path.exists(audio_path):
