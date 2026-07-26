@@ -5,7 +5,7 @@ import anthropic
 from openai import OpenAI
 import google.generativeai as genai
 import fal_client
-from config import OPENROUTER_API_KEY, ANTHROPIC_API_KEY, REPLICATE_API_TOKEN, FAL_API_KEY, GEMINI_API_KEY, CHANNEL_INTRODUCTION
+from config import OPENROUTER_API_KEY, ANTHROPIC_API_KEY, REPLICATE_API_TOKEN, FAL_API_KEY, GEMINI_API_KEY, CHANNEL_INTRODUCTION, OPENAI_API_KEY
 
 # Initialize clients safely
 # OpenRouter uses the OpenAI SDK format with a different base URL
@@ -330,47 +330,85 @@ def generate_thumbnail(image_prompt: str) -> str:
     return ""
 
 
-def generate_intro_video(image_url: str, image_prompt: str = "") -> str:
-    """Generate a Wan 2.1 i2v intro clip. Uses fal.ai if key is set, falls back to Replicate."""
+def generate_intro_video(intro_text: str, target_lang: str) -> str:
+    """Generate a talking-head intro video.
 
-    motion_prompt = (
-        (f"{image_prompt}. " if image_prompt else "")
-        + "Slow cinematic camera pull-back, volumetric atmospheric fog drifting through the scene, "
-          "dramatic golden-hour lighting, ultra-realistic historical documentary style."
-    )
+    Pipeline:
+      1. Pick the culturally-styled host photo for the target language.
+      2. Generate TTS audio from intro_text using OpenAI (onyx voice).
+      3. Upload both files to fal.ai storage.
+      4. Run fal-ai/sync-lipsync → returns a lip-synced video URL.
+    """
+    import os
+    import tempfile
 
-    # ── fal.ai (primary) ────────────────────────────────────────────────────
-    if FAL_API_KEY:
-        try:
-            import os
-            os.environ["FAL_KEY"] = FAL_API_KEY
-            result = fal_client.subscribe(
-                "fal-ai/wan-i2v",
-                arguments={
-                    "image_url": image_url,
-                    "prompt": motion_prompt,
-                    "aspect_ratio": "16:9",
-                },
-            )
-            return result["video"]["url"]
-        except Exception as e:
-            logging.error(f"fal.ai video error: {e}")
+    # ── Language → host photo ────────────────────────────────────────────────
+    LANG_CODE = {
+        "English": "en", "Spanish": "es", "French": "fr", "German": "de",
+        "Portuguese": "pt", "Italian": "it", "Chinese": "zh", "Japanese": "ja",
+        "Russian": "ru", "Polish": "pl", "Romanian": "ro", "Turkish": "tr",
+    }
+    lang_code = LANG_CODE.get(target_lang, "en")
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    photo_path = os.path.join(base_dir, "host_photos", f"{lang_code}.jpg")
+    if not os.path.exists(photo_path):
+        photo_path = os.path.join(base_dir, "host_photos", "en.jpg")
 
-    # ── Replicate (fallback) ─────────────────────────────────────────────────
-    if REPLICATE_API_TOKEN:
-        try:
-            output = replicate.run(
-                "wavespeedai/wan-2.1-i2v-480p",
-                input={
-                    "image": image_url,
-                    "prompt": motion_prompt,
-                    "aspect_ratio": "16:9",
-                    "fast_mode": "Balanced",
-                },
-            )
-            result = output[0] if isinstance(output, list) else output
-            return str(result.url) if hasattr(result, "url") else str(result)
-        except Exception as e:
-            logging.error(f"Replicate video error: {e}")
+    if not os.path.exists(photo_path):
+        logging.error(f"Host photo not found for lang '{lang_code}'")
+        return ""
 
-    return ""
+    # ── Step 1: TTS via OpenAI ───────────────────────────────────────────────
+    if not OPENAI_API_KEY:
+        logging.error("OPENAI_API_KEY not set — cannot generate TTS for intro video")
+        return ""
+
+    audio_path = None
+    try:
+        tts_client = OpenAI(api_key=OPENAI_API_KEY)
+        tts_response = tts_client.audio.speech.create(
+            model="tts-1-hd",
+            voice="onyx",
+            input=intro_text,
+            speed=0.92,
+        )
+        audio_tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+        audio_tmp.write(tts_response.content)
+        audio_tmp.close()
+        audio_path = audio_tmp.name
+        logging.info(f"TTS audio generated: {audio_path}")
+    except Exception as e:
+        logging.error(f"TTS generation failed: {e}")
+        return ""
+
+    # ── Step 2: Upload to fal storage & run lip-sync ─────────────────────────
+    if not FAL_API_KEY:
+        logging.error("FAL_API_KEY not set — cannot run lip-sync")
+        if audio_path:
+            os.unlink(audio_path)
+        return ""
+
+    try:
+        os.environ["FAL_KEY"] = FAL_API_KEY
+
+        photo_url = fal_client.upload_file(photo_path)
+        audio_url = fal_client.upload_file(audio_path)
+        logging.info(f"Uploaded photo → {photo_url[:60]}")
+        logging.info(f"Uploaded audio → {audio_url[:60]}")
+
+        result = fal_client.subscribe(
+            "fal-ai/sync-lipsync",
+            arguments={
+                "video_url": photo_url,
+                "audio_url": audio_url,
+            },
+        )
+        video_url = result.get("video", {}).get("url", "")
+        logging.info(f"Lip-sync video URL: {video_url[:80] if video_url else 'EMPTY'}")
+        return video_url
+    except Exception as e:
+        logging.error(f"fal.ai lip-sync error: {e}")
+        return ""
+    finally:
+        if audio_path and os.path.exists(audio_path):
+            os.unlink(audio_path)

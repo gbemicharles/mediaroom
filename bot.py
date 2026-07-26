@@ -667,23 +667,29 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
                     chat_id=chat_id, photo=image_url,
                     caption="🖼️ <b>Generated Thumbnail</b>", parse_mode="HTML"
                 )
-
-                await _send_html(context.bot, chat_id, "🎬 <b>Generating intro video…</b> <i>(~30–60 s)</i>")
-                logging.info("STEP 8: Calling Wan 2.1 i2v video generation")
-                video_url = await asyncio.to_thread(generate_intro_video, image_url, image_prompt)
-                logging.info(f"STEP 9: Video URL: {video_url[:80] if video_url else 'EMPTY'}")
-
-                if video_url:
-                    await context.bot.send_video(
-                        chat_id=chat_id, video=video_url,
-                        caption="🎞️ <b>Generated Intro Video</b>", parse_mode="HTML"
-                    )
-                else:
-                    await _send_html(context.bot, chat_id, "❌ <b>Intro video generation failed.</b>")
             else:
                 await _send_html(context.bot, chat_id, "❌ <b>Thumbnail generation failed.</b> Check Replicate billing.")
+
+        # ── Intro video (talking-head, independent of thumbnail) ──────────────
+        intro_for_video = ""
+        if pack_transcript:
+            intro_for_video = pack_transcript.split("\n\n")[0].strip()
+        if not intro_for_video:
+            from config import CHANNEL_INTRODUCTION
+            intro_for_video = CHANNEL_INTRODUCTION
+
+        await _send_html(context.bot, chat_id, "🎬 <b>Generating intro video…</b> <i>(~60–90 s)</i>")
+        logging.info("STEP 8: Calling talking-head lip-sync video generation")
+        video_url = await asyncio.to_thread(generate_intro_video, intro_for_video, target_lang)
+        logging.info(f"STEP 9: Video URL: {video_url[:80] if video_url else 'EMPTY'}")
+
+        if video_url:
+            await context.bot.send_video(
+                chat_id=chat_id, video=video_url,
+                caption="🎞️ <b>AI Host Intro</b>", parse_mode="HTML"
+            )
         else:
-            await _send_html(context.bot, chat_id, "⚠️ <b>No thumbnail prompt found</b> in the AI response.")
+            await _send_html(context.bot, chat_id, "❌ <b>Intro video generation failed.</b>")
 
         # ── Summary card ─────────────────────────────────────────────────────
         has_thumbnail = bool(image_prompt and image_prompt != "A generic YouTube thumbnail")

@@ -21,6 +21,7 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 # OpenRouter API Key (for Text generation via OpenRouter - routes to Claude, GPT-4o, etc.)
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Webshare credentials
 WEBSHARE_API_TOKEN = os.getenv("WEBSHARE_API_TOKEN")
