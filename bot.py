@@ -742,27 +742,72 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Error handling document: {e}")
         await context.bot.send_message(chat_id=chat_id, text=f"❌ An error occurred: {e}")
 
+def _is_meaningful_transcript(text: str) -> bool:
+    """Return True if text looks like a real transcript (≥200 chars and ≥40 words)."""
+    stripped = text.strip()
+    if len(stripped) < 200:
+        return False
+    word_count = len(stripped.split())
+    return word_count >= 40
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     text = update.message.text or ""
-    
+
+    # 1. YouTube link?
     video_id = extract_video_id(text)
     if video_id:
-        # Cache video URL in user_data
         context.user_data['pending_video_url'] = text
         context.user_data['pending_transcript'] = None
         context.user_data['pending_caption'] = ""
-    else:
-        # Cache text directly as transcript/input content
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="🌐 Select the target language for the transcript translation and generated assets:",
+            reply_markup=get_language_keyboard()
+        )
+        return
+
+    # 2. Looks like some other URL (not YouTube)?
+    if re.search(r'https?://', text):
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "❌ That doesn't look like a YouTube link.\n\n"
+                "Please send:\n"
+                "• A <b>YouTube URL</b> (e.g. <code>https://youtu.be/...</code>)\n"
+                "• A <b>.txt file</b> with your transcript\n"
+                "• A <b>full transcript</b> pasted as text (at least 40 words)"
+            ),
+            parse_mode="HTML"
+        )
+        return
+
+    # 3. Meaningful transcript text?
+    if _is_meaningful_transcript(text):
         context.user_data['pending_video_url'] = None
         context.user_data['pending_transcript'] = text
         context.user_data['pending_caption'] = ""
-    
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="🌐 Select the target language for the transcript translation and generated assets:",
+            reply_markup=get_language_keyboard()
+        )
+        return
+
+    # 4. Too short / meaningless
+    word_count = len(text.strip().split())
     await context.bot.send_message(
         chat_id=chat_id,
-        text="🌐 Select the target language for the transcript translation and generated assets:",
-        reply_markup=get_language_keyboard()
+        text=(
+            f"❌ That message is too short to process ({word_count} word{'s' if word_count != 1 else ''}).\n\n"
+            "<b>Mediaroom</b> accepts:\n"
+            "• A <b>YouTube URL</b> — I'll fetch the transcript automatically\n"
+            "• A <b>.txt file</b> — attach your transcript as a file\n"
+            "• A <b>full transcript</b> pasted as text — at least 40 words"
+        ),
+        parse_mode="HTML"
     )
 
 async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
