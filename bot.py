@@ -753,8 +753,7 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             if url:
                 await context.bot.send_photo(
                     chat_id=chat_id, photo=url,
-                    caption="🖼️ <b>Generated Thumbnail</b>", parse_mode="HTML",
-                    reply_markup=_regen_btn("regen_thumb", "🔄 Regenerate thumbnail")
+                    caption="🖼️ <b>Generated Thumbnail</b>", parse_mode="HTML"
                 )
             else:
                 await _send_html(context.bot, chat_id, "❌ <b>Thumbnail generation failed.</b>")
@@ -767,8 +766,7 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             if url:
                 await context.bot.send_video(
                     chat_id=chat_id, video=url,
-                    caption="🎞️ <b>AI Host Intro</b>", parse_mode="HTML",
-                    reply_markup=_regen_btn("regen_video", "🔄 Regenerate intro video")
+                    caption="🎞️ <b>AI Host Intro</b>", parse_mode="HTML"
                 )
             else:
                 await _send_html(context.bot, chat_id, "❌ <b>Intro video generation failed.</b>")

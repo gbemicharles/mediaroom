@@ -456,15 +456,11 @@ def generate_thumbnail(image_prompt: str, hook_text: str = "") -> str:
     import os
     os.environ.setdefault("FAL_KEY", FAL_API_KEY or "")
 
-    # Reinforce the title in the FLUX prompt so it shapes the composition
-    # even when FLUX doesn't render text perfectly — the scene will leave space for it
+    # Use the image prompt as-is — do NOT ask FLUX to render text.
+    # PIL burns the hook text on top cleanly in a second pass.
+    # Injecting text into the FLUX prompt causes FLUX to render its own
+    # version which clashes with (and shows through) the PIL overlay.
     flux_prompt = image_prompt
-    if hook_text:
-        flux_prompt = (
-            f"{image_prompt.rstrip('. ')}. "
-            f"The words \"{hook_text.upper()}\" appear in large bold gold cinematic lettering "
-            f"integrated into the upper portion of the image, styled like a premium documentary title card."
-        )
 
     image_url = ""
 
