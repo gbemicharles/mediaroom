@@ -470,63 +470,73 @@ def generate_thumbnail(image_prompt: str, hook_text: str = "") -> str:
 
 
 def generate_intro_video(intro_text: str, target_lang: str) -> str:
-    """Generate a 10-second talking-head intro video via HeyGen.
+    """Generate a ~10-second full-body intro video via HeyGen v3.
 
     Pipeline:
-      1. LLM condenses intro_text to ~10 s spoken script in target_lang.
-      2. gTTS → audio file.
-      3. Upload host photo + audio to HeyGen asset storage.
-      4. Submit HeyGen talking-photo video job.
-      5. Poll until complete (max 3 min) → return video URL.
+      1. LLM condenses intro_text to ~20-28 words in target_lang.
+      2. Submit HeyGen avatar video job (full-body avatar + built-in voice + script).
+      3. Poll until complete (max 3 min) → return video URL.
     """
-    import os
     import time
-    import tempfile
     import requests
 
-    LANG_CODE = {
-        "English": "en", "Spanish": "es", "French": "fr", "German": "de",
-        "Portuguese": "pt", "Italian": "it", "Chinese": "zh", "Japanese": "ja",
-        "Russian": "ru", "Polish": "pl", "Romanian": "ro", "Turkish": "tr",
-    }
-    GTTS_LANG = {
-        "English": "en", "Spanish": "es", "French": "fr", "German": "de",
-        "Portuguese": "pt", "Italian": "it", "Chinese": "zh-CN", "Japanese": "ja",
-        "Russian": "ru", "Polish": "pl", "Romanian": "ro", "Turkish": "tr",
+    # ── Culturally matched full-body standing male avatars ────────────────────
+    AVATAR_ID = {
+        "English":    "Marcus_Suit_Front_public",              # Black male, professional suit
+        "Spanish":    "Raul_standing_office_front",            # Hispanic male, office
+        "French":     "Vince_standing_businesstraining_front", # Southern-European, training stance
+        "German":     "Jonas_standing_gym_front",              # Athletic European male
+        "Portuguese": "Raul_standing_casualsofa_front",        # Hispanic/Brazilian, casual
+        "Italian":    "Vince_standing_sofacasual_front",       # Southern-European, casual
+        "Chinese":    "Jin_Suit_Front_public",                 # East-Asian male, suit
+        "Japanese":   "Ren_standing_office_front",             # East-Asian male, office
+        "Russian":    "Teodor_standing_office_front",          # Slavic/Eastern-European, office
+        "Polish":     "Teodor_standing_sofa_front",            # Slavic/Eastern-European, sofa
+        "Romanian":   "Teodor_standing_sofa_front",            # Slavic/Eastern-European, sofa
+        "Turkish":    "Onat_Suit_Front_public",                # Middle-Eastern/Turkish, suit
     }
 
-    lang_code = LANG_CODE.get(target_lang, "en")
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    photo_path = os.path.join(base_dir, "host_photos", f"{lang_code}.jpg")
-    if not os.path.exists(photo_path):
-        photo_path = os.path.join(base_dir, "host_photos", "en.jpg")
-    if not os.path.exists(photo_path):
-        logging.error(f"Host photo not found for lang '{lang_code}'")
-        return ""
+    # ── Natural male HeyGen voices per language ───────────────────────────────
+    VOICE_ID = {
+        "English":    "828b59f834fd4c7188da322b6d9b6c75",  # David Castlemore — warm, authoritative
+        "Spanish":    "626ca51acb2e496f8dcee8d7591fda3c",  # Narrator Mateo — storytelling
+        "French":     "25a6a67280574d3da78e97b1935ebfc7",  # Émile Noir — cinematic French
+        "German":     "5bc2783d1d1b45f0973a1ce8e269c35d",  # Vibrant Viktor — energetic German
+        "Portuguese": "c8ac31e97555494fb8502599e6bc5461",  # Adriano — natural Brazilian/Portuguese
+        "Italian":    "23afa694410d427d9ec632080079b74f",  # Voce Minatore Audiolibro — audiobook
+        "Chinese":    "735c507fdc844be3b1528dd33f7dfb2a",  # Martin Li — professional Chinese
+        "Japanese":   "662e1397965c484e8f65fa58c77effde",  # Satoshi — natural Japanese male
+        "Russian":    "5f99970adadb42398bf1aeb963a3888b",  # Dmitry — deep Russian
+        "Polish":     "f2d44cfdd1dc4846ae54a01d9db9d9fe",  # Marek - Natural — Polish
+        "Romanian":   "ec218e50cc9c4991894676a31e4804c5",  # Emil - Natural — Romanian
+        "Turkish":    "836aa05e398543d08231f68bffdfc025",  # Deniz Yılmaz — Turkish
+    }
+
+    avatar_id = AVATAR_ID.get(target_lang, AVATAR_ID["English"])
+    voice_id  = VOICE_ID.get(target_lang,  VOICE_ID["English"])
 
     if not HEYGEN_API_KEY:
         logging.error("HEYGEN_API_KEY not set")
         return ""
 
-    HEYGEN_HEADERS = {"x-api-key": HEYGEN_API_KEY, "Content-Type": "application/json"}
+    HEYGEN_HEADERS = {"X-Api-Key": HEYGEN_API_KEY, "Content-Type": "application/json"}
 
     # ── Step 1: LLM → concise 10-second script in target language ────────────
     condensed_script = ""
     try:
+        system_prompt = (
+            f"You are a warm, storytelling YouTube host writing a 10-second spoken intro "
+            f"in {target_lang}. Capture the spirit of the reference text: invite the viewer "
+            f"to relax, hint at tonight's story, and wish them peaceful listening. "
+            f"Write exactly 20–28 words — no more. Natural, flowing, conversational speech. "
+            f"Output ONLY the final script — no quotes, no labels, nothing else."
+        )
         if openrouter_client:
             resp = openrouter_client.chat.completions.create(
                 model="google/gemini-2.5-flash",
                 max_tokens=120,
                 messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            f"You are a warm, storytelling YouTube host writing a 10-second spoken intro "
-                            f"in {target_lang}. Capture the spirit of the reference text. "
-                            f"Write exactly 20–28 words — no more. Calming, inviting, natural speech. "
-                            f"Output ONLY the final script, nothing else."
-                        ),
-                    },
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": intro_text},
                 ],
             )
@@ -535,16 +545,11 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
             resp = anthropic_client.messages.create(
                 model="claude-3-5-haiku-20241022",
                 max_tokens=120,
-                system=(
-                    f"You are a warm, storytelling YouTube host writing a 10-second spoken intro "
-                    f"in {target_lang}. Capture the spirit of the reference text. "
-                    f"Write exactly 20–28 words — no more. Calming, inviting, natural speech. "
-                    f"Output ONLY the final script, nothing else."
-                ),
+                system=system_prompt,
                 messages=[{"role": "user", "content": intro_text}],
             )
             condensed_script = resp.content[0].text.strip()
-        logging.info(f"Condensed intro ({target_lang}, {len(condensed_script.split())} words): {condensed_script!r}")
+        logging.info(f"Intro script ({target_lang}, {len(condensed_script.split())} words): {condensed_script!r}")
     except Exception as e:
         logging.error(f"LLM condensation failed: {e}")
 
@@ -552,56 +557,16 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         condensed_script = " ".join(intro_text.split()[:25])
         logging.info(f"Fallback script: {condensed_script!r}")
 
-    # ── Step 2: gTTS → audio file ─────────────────────────────────────────────
-    audio_path = None
+    # ── Step 2: Submit avatar video job ──────────────────────────────────────
+    payload = {
+        "type":         "avatar",
+        "avatar_id":    avatar_id,
+        "script":       condensed_script,
+        "voice_id":     voice_id,
+        "aspect_ratio": "16:9",
+    }
+    logging.info(f"Submitting HeyGen v3 avatar job (avatar={avatar_id}, voice={voice_id})…")
     try:
-        from gtts import gTTS
-        gtts_lang = GTTS_LANG.get(target_lang, "en")
-        tts = gTTS(text=condensed_script, lang=gtts_lang, slow=False)
-        audio_tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
-        tts.save(audio_tmp.name)
-        audio_path = audio_tmp.name
-        logging.info(f"TTS saved ({gtts_lang}): {audio_path}")
-    except Exception as e:
-        logging.error(f"gTTS failed: {e}")
-        return ""
-
-    try:
-        # ── Step 3: Upload photo + audio to HeyGen asset storage ─────────────
-        def _upload_asset(file_path: str, content_type: str) -> str:
-            with open(file_path, "rb") as f:
-                r = requests.post(
-                    "https://upload.heygen.com/v1/asset",
-                    headers={"x-api-key": HEYGEN_API_KEY, "Content-Type": content_type},
-                    data=f,
-                    timeout=60,
-                )
-            r.raise_for_status()
-            data = r.json().get("data", {})
-            asset_id = data.get("id") or data.get("asset_id", "")
-            if not asset_id:
-                raise ValueError(f"No asset ID in response: {r.text[:200]}")
-            return asset_id
-
-        logging.info("Uploading photo to HeyGen…")
-        photo_asset_id = _upload_asset(photo_path, "image/jpeg")
-        logging.info(f"Photo asset ID: {photo_asset_id}")
-
-        logging.info("Uploading audio to HeyGen…")
-        audio_asset_id = _upload_asset(audio_path, "audio/mpeg")
-        logging.info(f"Audio asset ID: {audio_asset_id}")
-
-        # ── Step 4: Submit video job via v3 API ──────────────────────────────
-        payload = {
-            "type": "image",
-            "image": {
-                "type": "asset_id",
-                "asset_id": photo_asset_id,
-            },
-            "audio_asset_id": audio_asset_id,
-            "aspect_ratio": "16:9",
-        }
-        logging.info("Submitting HeyGen v3 video job…")
         r = requests.post(
             "https://api.heygen.com/v3/videos",
             headers=HEYGEN_HEADERS,
@@ -609,46 +574,42 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
             timeout=30,
         )
         r.raise_for_status()
-        resp_data = r.json().get("data", {})
-        video_id = resp_data.get("video_id", "")
-        if not video_id:
-            logging.error(f"HeyGen returned no video_id: {r.text[:300]}")
-            return ""
-        logging.info(f"HeyGen video_id: {video_id}")
+    except Exception as e:
+        logging.error(f"HeyGen submit failed: {e}")
+        return ""
 
-        # ── Step 5: Poll until complete (max 3 minutes) ───────────────────────
-        deadline = time.time() + 180
-        while time.time() < deadline:
-            time.sleep(5)
+    video_id = r.json().get("data", {}).get("video_id", "")
+    if not video_id:
+        logging.error(f"HeyGen returned no video_id: {r.text[:300]}")
+        return ""
+    logging.info(f"HeyGen video_id: {video_id}")
+
+    # ── Step 3: Poll until complete (max 3 minutes) ───────────────────────────
+    deadline = time.time() + 180
+    while time.time() < deadline:
+        time.sleep(5)
+        try:
             sr = requests.get(
                 f"https://api.heygen.com/v3/videos/{video_id}",
                 headers={"X-Api-Key": HEYGEN_API_KEY},
                 timeout=15,
             )
             sr.raise_for_status()
-            status_data = sr.json().get("data", {})
-            status = status_data.get("status", "")
-            logging.info(f"HeyGen status: {status}")
+        except Exception as e:
+            logging.warning(f"HeyGen poll error (will retry): {e}")
+            continue
 
-            if status == "completed":
-                video_url = status_data.get("video_url", "")
-                logging.info(f"HeyGen video ready: {video_url[:80]}")
-                return video_url
-            elif status == "failed":
-                reason = status_data.get("error", {})
-                logging.error(f"HeyGen job failed: {reason}")
-                return ""
-            # still processing — keep polling
+        status_data = sr.json().get("data", {})
+        status = status_data.get("status", "")
+        logging.info(f"HeyGen status: {status}")
 
-        logging.error("HeyGen polling timed out after 3 minutes")
-        return ""
+        if status == "completed":
+            video_url = status_data.get("video_url", "")
+            logging.info(f"HeyGen video ready: {video_url[:80]}")
+            return video_url
+        elif status == "failed":
+            logging.error(f"HeyGen job failed: {status_data.get('error', 'unknown')}")
+            return ""
 
-    except Exception as e:
-        logging.error(f"HeyGen intro video error: {e}")
-        return ""
-    finally:
-        if audio_path and os.path.exists(audio_path):
-            try:
-                os.unlink(audio_path)
-            except Exception:
-                pass
+    logging.error("HeyGen polling timed out after 3 minutes")
+    return ""
