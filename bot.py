@@ -22,7 +22,7 @@ class RateLimitedError(Exception):
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 from config import check_env_vars, TELEGRAM_BOT_TOKEN, DEFAULT_PROMPT, get_webshare_proxies, WEBSHARE_PROXY_USERNAME, WEBSHARE_PROXY_PASSWORD
-from ai_services import generate_text_and_extract_prompt, generate_thumbnail, generate_intro_video, translate_chunk, split_transcript_into_chunks, split_into_paragraphs
+from ai_services import generate_text_and_extract_prompt, generate_thumbnail, generate_intro_video, regenerate_section, translate_chunk, split_transcript_into_chunks, split_into_paragraphs
 
 # Setup logging
 logging.basicConfig(
@@ -467,8 +467,8 @@ def get_language_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def _parse_production_pack(full_text: str) -> list[tuple[str, str]]:
-    """Parse the AI production pack into (header, body) section pairs for pretty formatting."""
+def _parse_production_pack(full_text: str) -> list[tuple[str, str, int]]:
+    """Parse the AI production pack into (header, body, section_num) triples."""
     SECTION_EMOJIS = {
         "TITLE": "🏆", "BEST TITLE": "🥇", "WINNER": "🥇", "SEO": "📋", "DESCRIPTION": "📋",
         "HASHTAG": "#️⃣", "TAG": "🏷️", "HOST SCRIPT": "🎙️", "SCRIPT": "🎙️",
@@ -489,20 +489,55 @@ def _parse_production_pack(full_text: str) -> list[tuple[str, str]]:
         part = part.strip()
         if not part:
             continue
-        header_match = re.match(r'^#{1,3}\s*\d+[\.\)]\s+(.+)', part)
+        header_match = re.match(r'^#{1,3}\s*(\d+)[\.\)]\s+(.+)', part)
         if header_match:
-            title = header_match.group(1).strip()
+            section_num = int(header_match.group(1))
+            title = header_match.group(2).strip()
             # Normalise legacy label
             if title.upper() == "WINNER":
                 title = "BEST TITLE"
             body = part[header_match.end():].strip()
             em = emoji_for(title)
-            sections.append((f"{em} {title}", body))
+            sections.append((f"{em} {title}", body, section_num))
         else:
             # Preamble / unlabeled text — skip if very short
             if len(part) > 30:
-                sections.append(("", part))
+                sections.append(("", part, 0))
     return sections
+
+
+def _is_code_block_section(header: str) -> bool:
+    """Sections whose body should be wrapped in <code> for one-tap copying."""
+    h = header.upper()
+    return "DESCRIPTION" in h or ("TAG" in h and "HASHTAG" not in h and "THUMBNAIL" not in h)
+
+
+def _regen_btn(callback_data: str, label: str = "🔄 Regenerate") -> InlineKeyboardMarkup:
+    """Return a single-button inline keyboard for regeneration."""
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=callback_data)]])
+
+
+def _extract_winner_title(text: str) -> str:
+    """Return the target-language winning title, stripped of markdown."""
+    m = re.search(
+        r'(?:^|\n)#?\s*2[\.\)]\s*(?:WINNER|BEST TITLE)\b(.*?)(?:\n-{3,}|\n#\s*3[\.\)])',
+        text, re.IGNORECASE | re.DOTALL,
+    )
+    block = m.group(1) if m else text
+    for line in block.splitlines():
+        line = line.strip()
+        if not line or '🇷🇺' in line:
+            continue
+        cm = re.match(r'^[^:]{1,40}:\s*(.{10,})$', line)
+        candidate = cm.group(1).strip() if cm else ""
+        if not candidate and len(line.split()) >= 4:
+            candidate = line
+        if candidate:
+            candidate = re.sub(r'[\*#_`~]+', '', candidate).strip()
+            words = candidate.split()
+            if 3 <= len(words) <= 12 and not candidate.endswith('.'):
+                return candidate
+    return ""
 
 
 def _html(text: str) -> str:
@@ -518,23 +553,39 @@ def _html(text: str) -> str:
     return text
 
 
-async def _send_html(bot, chat_id: int, text: str):
-    """Send a message with HTML parse mode, splitting if over 4000 chars."""
+def _build_section_msg(header: str, body: str) -> str:
+    """Format a single production-pack section for Telegram HTML."""
+    if header and _is_code_block_section(header):
+        stage2 = re.search(r'\nSTAGE\s+2', body, re.IGNORECASE)
+        if stage2:
+            safe1 = body[:stage2.start()].strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            return f"<b>{_html(header)}</b>\n{'─'*20}\n<code>{safe1}</code>\n\n{_html(body[stage2.start():].strip())}"
+        safe = body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return f"<b>{_html(header)}</b>\n{'─'*20}\n<code>{safe}</code>"
+    return f"<b>{_html(header)}</b>\n{'─'*20}\n{_html(body)}" if header else _html(body)
+
+
+async def _send_html(bot, chat_id: int, text: str, reply_markup=None):
+    """Send a message with HTML parse mode, splitting if over 4000 chars.
+    reply_markup (InlineKeyboardMarkup) is attached to the last chunk only."""
     MAX = 4000
     if len(text) <= MAX:
-        await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=reply_markup)
         return
-    # Split on double newlines to avoid breaking mid-word
+    # Split on lines to avoid breaking mid-word; attach reply_markup to the last chunk
     chunks, current = [], ""
     for line in text.split("\n"):
         if len(current) + len(line) + 1 > MAX:
             if current:
-                await bot.send_message(chat_id=chat_id, text=current.strip(), parse_mode="HTML")
+                chunks.append(current.strip())
             current = line + "\n"
         else:
             current += line + "\n"
     if current.strip():
-        await bot.send_message(chat_id=chat_id, text=current.strip(), parse_mode="HTML")
+        chunks.append(current.strip())
+    for i, chunk in enumerate(chunks):
+        markup = reply_markup if i == len(chunks) - 1 else None
+        await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="HTML", reply_markup=markup)
 
 
 async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, transcript_text: str, target_lang: str):
@@ -589,35 +640,6 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
         full_text, image_prompt, pack_transcript = pack_result
         logging.info(f"STEP 2: pack={len(full_text)} chars, {len(translated_parts)} translated chunks")
 
-        # Extract the winning title (section 2 WINNER) to burn onto the thumbnail.
-        def _extract_winner_title(text: str) -> str:
-            """Return the target-language winning title, stripped of markdown."""
-            # Find the block between the WINNER header and the next section separator
-            m = re.search(
-                r'(?:^|\n)#?\s*2[\.\)]\s*WINNER\b(.*?)(?:\n-{3,}|\n#\s*3[\.\)])',
-                text, re.IGNORECASE | re.DOTALL,
-            )
-            block = m.group(1) if m else text   # fallback: search whole text
-
-            for line in block.splitlines():
-                line = line.strip()
-                if not line or '🇷🇺' in line:
-                    continue
-                # "Language: Title" pattern — grab the title part
-                cm = re.match(r'^[^:]{1,40}:\s*(.{10,})$', line)
-                candidate = cm.group(1).strip() if cm else ""
-                # If no colon pattern, treat the line itself as candidate if long enough
-                if not candidate and len(line.split()) >= 4:
-                    candidate = line
-                if candidate:
-                    # Strip markdown formatting (**bold**, *italic*, ## headers, etc.)
-                    candidate = re.sub(r'[\*#_`~]+', '', candidate).strip()
-                    # Must look like a title: 3-12 words, not ending with a period (prose)
-                    words = candidate.split()
-                    if 3 <= len(words) <= 12 and not candidate.endswith('.'):
-                        return candidate
-            return ""
-
         hook_text = _extract_winner_title(full_text)
         logging.info(f"Thumbnail title extracted: {hook_text!r}")
 
@@ -671,31 +693,14 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             f"{'─' * 28}"
         )
 
-        def _is_code_block_section(header: str) -> bool:
-            """Sections whose body should be wrapped in <code> for one-tap copying."""
-            h = header.upper()
-            return "DESCRIPTION" in h or ("TAG" in h and "HASHTAG" not in h and "THUMBNAIL" not in h)
-
         sections = _parse_production_pack(full_text)
         if sections:
-            for header, body in sections:
+            for header, body, section_num in sections:
                 if not body.strip():
                     continue
-                if header and _is_code_block_section(header):
-                    # Only wrap STAGE 1 (target language) in <code>; STAGE 2 (Russian) stays plain
-                    stage2 = re.search(r'\nSTAGE\s+2', body, re.IGNORECASE)
-                    if stage2:
-                        stage1_text = body[:stage2.start()].strip()
-                        stage2_text = body[stage2.start():].strip()
-                        safe1 = stage1_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                        msg = f"<b>{_html(header)}</b>\n{'─' * 20}\n<code>{safe1}</code>\n\n{_html(stage2_text)}"
-                    else:
-                        safe_body = body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                        msg = f"<b>{_html(header)}</b>\n{'─' * 20}\n<code>{safe_body}</code>"
-                else:
-                    msg = (f"<b>{_html(header)}</b>\n{'─' * 20}\n{_html(body)}" if header
-                           else _html(body))
-                await _send_html(context.bot, chat_id, msg)
+                msg = _build_section_msg(header, body)
+                markup = _regen_btn(f"regen_s{section_num}") if section_num > 0 else None
+                await _send_html(context.bot, chat_id, msg, reply_markup=markup)
         else:
             # Fallback: send raw text if parsing found nothing
             await _send_html(context.bot, chat_id, _html(full_text))
@@ -731,11 +736,11 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             logging.info("STEP 6: Calling generate_thumbnail (parallel)")
             url = await asyncio.to_thread(generate_thumbnail, image_prompt, hook_text)
             logging.info(f"STEP 6 done: {url[:80] if url else 'EMPTY'}")
-            # ── Deliver thumbnail immediately when ready ───────────────────────
             if url:
                 await context.bot.send_photo(
                     chat_id=chat_id, photo=url,
-                    caption="🖼️ <b>Generated Thumbnail</b>", parse_mode="HTML"
+                    caption="🖼️ <b>Generated Thumbnail</b>", parse_mode="HTML",
+                    reply_markup=_regen_btn("regen_thumb", "🔄 Regenerate thumbnail")
                 )
             else:
                 await _send_html(context.bot, chat_id, "❌ <b>Thumbnail generation failed.</b>")
@@ -745,17 +750,28 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             logging.info("STEP 8: Calling generate_intro_video (parallel)")
             url = await asyncio.to_thread(generate_intro_video, intro_for_video, target_lang, image_prompt)
             logging.info(f"STEP 8 done: {url[:80] if url else 'EMPTY'}")
-            # ── Deliver video immediately when ready ───────────────────────────
             if url:
                 await context.bot.send_video(
                     chat_id=chat_id, video=url,
-                    caption="🎞️ <b>AI Host Intro</b>", parse_mode="HTML"
+                    caption="🎞️ <b>AI Host Intro</b>", parse_mode="HTML",
+                    reply_markup=_regen_btn("regen_video", "🔄 Regenerate intro video")
                 )
             else:
                 await _send_html(context.bot, chat_id, "❌ <b>Intro video generation failed.</b>")
             return url
 
         image_url, video_url = await asyncio.gather(_gen_thumbnail(), _gen_video())
+
+        # ── Save session state for per-section regeneration ───────────────────
+        context.user_data['last_pack'] = {
+            'transcript':    translated_transcript_raw,
+            'target_lang':   target_lang,
+            'full_text':     full_text,
+            'image_prompt':  image_prompt,
+            'hook_text':     hook_text,
+            'intro_text':    intro_for_video,
+            'system_prompt': prompt_to_use,
+        }
 
         # ── Summary card ─────────────────────────────────────────────────────
         has_thumbnail = bool(image_prompt and image_prompt != "A generic YouTube thumbnail")
@@ -767,7 +783,7 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             f"🖼️ Thumbnail — {'generated' if has_thumbnail else '⚠️ skipped (no prompt)'}",
             f"🎞️ Intro video — {'generated' if has_thumbnail else '⚠️ skipped'}",
             f"",
-            f"<i>Send another transcript or YouTube link to start a new job.</i>",
+            f"<i>Use 🔄 Regenerate buttons above to redo any individual section.</i>",
         ]
         await _send_html(context.bot, chat_id, "\n".join(summary_lines))
         logging.info("STEP 10: process_transcript complete")
@@ -775,6 +791,110 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
     except Exception as e:
         logging.error(f"Error in process_transcript: {e}", exc_info=True)
         await context.bot.send_message(chat_id=chat_id, text=f"❌ An error occurred: {e}")
+
+async def regen_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle 🔄 Regenerate button presses for any individual section, thumbnail, or video."""
+    query = update.callback_query
+    await query.answer("🔄 Regenerating…")
+
+    data     = query.data
+    chat_id  = update.effective_chat.id
+    pack     = context.user_data.get('last_pack')
+
+    if not pack:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="❌ Session expired — please resend the transcript to start a new job."
+        )
+        return
+
+    # ── Text section regeneration (regen_s1 … regen_s7) ─────────────────────
+    if data.startswith("regen_s"):
+        section_num = int(data[7:])
+        section_labels = {
+            1: "Title Ideas", 2: "Best Title", 3: "SEO Description & Hashtags",
+            4: "Tags", 5: "AI Host Script", 6: "AI Host Photo Prompt", 7: "Thumbnail Prompt",
+        }
+        label = section_labels.get(section_num, f"Section {section_num}")
+        await context.bot.send_message(chat_id=chat_id, text=f"🔄 Regenerating {label}…")
+
+        new_text = await asyncio.to_thread(
+            regenerate_section,
+            section_num,
+            pack['transcript'],
+            pack['target_lang'],
+            pack['full_text'],
+            pack['system_prompt'],
+        )
+        if not new_text:
+            await context.bot.send_message(chat_id=chat_id, text="❌ Regeneration failed. Please try again.")
+            return
+
+        # ── Section 7: extract new thumbnail prompt and persist it ────────────
+        if section_num == 7:
+            m = re.search(r'<thumbnail_prompt>(.*?)</thumbnail_prompt>', new_text, re.DOTALL)
+            if m:
+                pack['image_prompt'] = m.group(1).strip()
+                new_text = new_text.replace("<thumbnail_prompt>", "").replace("</thumbnail_prompt>", "").strip()
+                context.user_data['last_pack'] = pack
+
+        # ── Section 2: extract new winning title and persist it ───────────────
+        if section_num == 2:
+            new_hook = _extract_winner_title(new_text)
+            if new_hook:
+                pack['hook_text'] = new_hook
+                context.user_data['last_pack'] = pack
+
+        # ── Format and send ───────────────────────────────────────────────────
+        parsed = _parse_production_pack(new_text)
+        if parsed:
+            header, body, snum = parsed[0]
+        else:
+            header, body, snum = f"▪️ Section {section_num}", new_text, section_num
+
+        msg = _build_section_msg(header, body)
+        await _send_html(
+            context.bot, chat_id, msg,
+            reply_markup=_regen_btn(f"regen_s{section_num}")
+        )
+
+    # ── Thumbnail image regeneration ─────────────────────────────────────────
+    elif data == "regen_thumb":
+        if not pack.get('image_prompt'):
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="❌ No thumbnail prompt on file. Regenerate Section 7 first to get a new prompt."
+            )
+            return
+        await context.bot.send_message(chat_id=chat_id, text="🎨 Regenerating thumbnail…")
+        url = await asyncio.to_thread(generate_thumbnail, pack['image_prompt'], pack.get('hook_text', ''))
+        if url:
+            await context.bot.send_photo(
+                chat_id=chat_id, photo=url,
+                caption="🖼️ <b>Regenerated Thumbnail</b>", parse_mode="HTML",
+                reply_markup=_regen_btn("regen_thumb", "🔄 Regenerate thumbnail")
+            )
+        else:
+            await context.bot.send_message(chat_id=chat_id, text="❌ Thumbnail regeneration failed.")
+
+    # ── Intro video regeneration ──────────────────────────────────────────────
+    elif data == "regen_video":
+        await context.bot.send_message(chat_id=chat_id, text="🎬 Regenerating intro video…")
+        url = await asyncio.to_thread(
+            generate_intro_video,
+            pack.get('intro_text', ''),
+            pack['target_lang'],
+            pack.get('image_prompt', ''),
+        )
+        if url:
+            await context.bot.send_video(
+                chat_id=chat_id, video=url,
+                caption="🎞️ <b>Regenerated AI Host Intro</b>", parse_mode="HTML",
+                reply_markup=_regen_btn("regen_video", "🔄 Regenerate intro video")
+            )
+        else:
+            await context.bot.send_message(chat_id=chat_id, text="❌ Intro video regeneration failed.")
+
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1099,7 +1219,8 @@ if __name__ == '__main__':
     
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('setprompt', set_prompt))
-    application.add_handler(CallbackQueryHandler(language_callback))
+    application.add_handler(CallbackQueryHandler(language_callback, pattern=r'^lang_'))
+    application.add_handler(CallbackQueryHandler(regen_callback,    pattern=r'^regen_'))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     

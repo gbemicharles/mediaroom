@@ -505,6 +505,75 @@ def generate_thumbnail(image_prompt: str, hook_text: str = "") -> str:
     return image_url
 
 
+def regenerate_section(section_num: int, transcript: str, target_lang: str,
+                       full_pack_text: str, system_prompt: str) -> str:
+    """Re-generate a single production-pack section independently.
+
+    Returns the raw LLM text for that section (including its markdown header).
+    Returns empty string on failure.
+    """
+    section_names = {
+        1: "TITLE IDEAS",
+        2: "WINNER",
+        3: "SEO DESCRIPTION & HASHTAGS",
+        4: "TAGS",
+        5: "AI HOST SCRIPT",
+        6: "AI HOST PHOTO PROMPT",
+        7: "THUMBNAIL PROMPT",
+    }
+    name = section_names.get(section_num, f"Section {section_num}")
+
+    tag_note = (
+        "\nWrap the image generation prompt in <thumbnail_prompt>...</thumbnail_prompt> tags, "
+        "exactly as in the original format."
+        if section_num == 7 else ""
+    )
+
+    regen_system = (
+        f"{system_prompt}\n\n"
+        f"━━━ REGENERATION INSTRUCTION ━━━\n"
+        f"Output ONLY Section {section_num}: {name}. "
+        f"Do NOT output any other section — not even their headers.\n"
+        f"Target language: {target_lang}.\n"
+        f"Make this version noticeably different from the existing one — "
+        f"try a different angle, structure, or framing while being equally strong or stronger."
+        f"{tag_note}"
+    )
+    user_content = (
+        f"TRANSCRIPT (target-language version):\n{transcript[:4000]}\n\n"
+        f"EXISTING PRODUCTION PACK (for context — do NOT repeat anything from it verbatim):\n"
+        f"{full_pack_text[:2000]}\n\n"
+        f"Now regenerate ONLY Section {section_num}: {name}."
+    )
+
+    result = ""
+    try:
+        if openrouter_client:
+            resp = openrouter_client.chat.completions.create(
+                model="anthropic/claude-sonnet-4-5",
+                max_tokens=1500,
+                temperature=0.85,
+                messages=[
+                    {"role": "system", "content": regen_system},
+                    {"role": "user",   "content": user_content},
+                ],
+            )
+            result = resp.choices[0].message.content.strip()
+        elif anthropic_client:
+            resp = anthropic_client.messages.create(
+                model="claude-sonnet-4-5",
+                max_tokens=1500,
+                temperature=0.85,
+                system=regen_system,
+                messages=[{"role": "user", "content": user_content}],
+            )
+            result = resp.content[0].text.strip()
+    except Exception as e:
+        logging.error(f"regenerate_section({section_num}) error: {e}")
+
+    return result
+
+
 def _detect_story_theme(text: str) -> str:
     """Classify story theme from keywords. Returns one of: bedtime, adventure, nature, educational, general."""
     low = text.lower()
