@@ -814,10 +814,7 @@ def _check_video_url(url: str) -> dict:
         return {'supported': True, 'has_captions': False, 'error': 'no_captions'}
 
     # Captions confirmed — yt-dlp printed a subtitle/caption listing
-    if any(p in low for p in ("available subtitles", "available automatic captions",
-                               "language  formats", "language formats",
-                               "[info]" )) and any(
-            ext in low for ext in (".vtt", ".srt", ".ttml", ".srv", "vtt\n", "srt\n")):
+    if any(p in low for p in ("available subtitles", "available automatic captions")):
         return {'supported': True, 'has_captions': True, 'error': ''}
 
     # Nothing confirmed either way → reject conservatively
