@@ -589,18 +589,30 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
         full_text, image_prompt, pack_transcript = pack_result
         logging.info(f"STEP 2: pack={len(full_text)} chars, {len(translated_parts)} translated chunks")
 
-        # Extract thumbnail hook text (STEP 1 of thumbnail section — 2-4 ALL CAPS words)
+        # Extract the winning title from section 2 (WINNER) — this is what goes on the thumbnail.
+        # Format: "[Lang]: [Title]" or "🇷🇺: [Title]" — we want the target-language line, not Russian.
         hook_text = ""
-        hook_match = re.search(
-            r'STEP\s+1[^\n]*\n\s*\n?\s*([^\n\-#]{3,60})',
-            full_text, re.IGNORECASE
+        winner_match = re.search(
+            r'#\s*2[\.\s]+WINNER.*?\n(.*?)\n\s*(?:#\s*3|--)',
+            full_text, re.IGNORECASE | re.DOTALL
         )
-        if hook_match:
-            candidate = hook_match.group(1).strip()
-            # Accept only if short (≤6 words) — avoid grabbing a paragraph
-            if len(candidate.split()) <= 6:
-                hook_text = candidate
-        logging.info(f"Hook text extracted: {hook_text!r}")
+        if winner_match:
+            block = winner_match.group(1)
+            for line in block.splitlines():
+                line = line.strip()
+                # Skip blank lines, the "why" explanation sentence, and the Russian flag line
+                if not line or '🇷🇺' in line:
+                    continue
+                # Match "Lang: Title" or just a standalone title line (no colon prefix)
+                colon_match = re.match(r'^[^:]{1,30}:\s*(.+)$', line)
+                if colon_match:
+                    hook_text = colon_match.group(1).strip()
+                    break
+                # Fallback: if it looks like a title (>4 words, no period at end = not explanation)
+                if len(line.split()) >= 4 and not line.endswith('.'):
+                    hook_text = line
+                    break
+        logging.info(f"Thumbnail title extracted: {hook_text!r}")
 
         # Combine raw Haiku translations, then split into ≤999-char paragraphs
         translated_transcript_raw = "\n\n".join(p for p in translated_parts if p.strip())

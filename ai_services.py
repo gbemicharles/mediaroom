@@ -318,9 +318,44 @@ A close-up studio portrait of a 45-year-old male historian with short grey hair 
     return full_text, thumbnail_prompt, final_transcript
 
 def _burn_hook_text(image_url: str, hook_text: str) -> str:
-    """Download thumbnail, burn hook text with PIL, re-upload and return new URL."""
-    import os, tempfile, requests
+    """Download thumbnail, burn title text (word-wrapped, 1-2 lines) with PIL, re-upload."""
+    import os, tempfile, requests, textwrap
     from PIL import Image, ImageDraw, ImageFont
+
+    FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    TARGET_WIDTH_RATIO = 0.88   # lines should span up to 88% of image width
+    MAX_FONT_SIZE      = 999    # will be capped by H//4 per line
+
+    def _best_wrap(draw, text: str, W: int, H: int):
+        """Return (lines, font) that maximises font size within 2 lines and width budget."""
+        words = text.split()
+        best = (None, None, 0)          # (lines, font, font_size)
+
+        # Try 1-line, then optimal 2-line split
+        candidates = [" ".join(words)]
+        for split in range(1, len(words)):
+            candidates.append(" ".join(words[:split]) + "\n" + " ".join(words[split:]))
+
+        for candidate in candidates:
+            lines = candidate.split("\n")
+            if len(lines) > 2:
+                continue
+            # Binary-search best font size for this wrapping
+            lo, hi = 10, min(MAX_FONT_SIZE, H // (3 * len(lines)))
+            chosen_size = lo
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                f = ImageFont.truetype(FONT_PATH, mid)
+                max_w = max(draw.textbbox((0, 0), l, font=f)[2] for l in lines)
+                if max_w <= W * TARGET_WIDTH_RATIO:
+                    chosen_size = mid
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            if chosen_size > best[2]:
+                best = (lines, ImageFont.truetype(FONT_PATH, chosen_size), chosen_size)
+
+        return best[0], best[1], best[2]
 
     try:
         resp = requests.get(image_url, timeout=30)
@@ -335,31 +370,32 @@ def _burn_hook_text(image_url: str, hook_text: str) -> str:
         W, H = img.size
 
         text = hook_text.upper().strip()
+        lines, font, font_size = _best_wrap(draw, text, W, H)
+        if not lines or not font:
+            logging.warning("_burn_hook_text: could not fit text, returning original")
+            return image_url
 
-        FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        # Scale font so text spans ~70% of image width
-        font_size = 10
-        font = ImageFont.truetype(FONT_PATH, font_size)
-        while True:
-            bbox = draw.textbbox((0, 0), text, font=font)
-            if (bbox[2] - bbox[0]) >= W * 0.70 or font_size >= H // 3:
-                break
-            font_size += 2
-            font = ImageFont.truetype(FONT_PATH, font_size)
+        # Measure total block height
+        line_bboxes = [draw.textbbox((0, 0), l, font=font) for l in lines]
+        line_heights = [bb[3] - bb[1] for bb in line_bboxes]
+        line_widths  = [bb[2] - bb[0] for bb in line_bboxes]
+        gap          = max(4, font_size // 8)
+        block_h      = sum(line_heights) + gap * (len(lines) - 1)
 
-        bbox = draw.textbbox((0, 0), text, font=font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        x = (W - tw) // 2
-        y = int(H * 0.06)
-
-        # Thick black outline
+        # Position: 6% from top
+        y_start = int(H * 0.06)
         outline = max(3, font_size // 10)
-        for dx in range(-outline, outline + 1):
-            for dy in range(-outline, outline + 1):
-                if dx or dy:
-                    draw.text((x + dx, y + dy), text, font=font, fill=(0, 0, 0))
-        # White fill
-        draw.text((x, y), text, font=font, fill=(255, 255, 255))
+
+        for i, line in enumerate(lines):
+            x = (W - line_widths[i]) // 2
+            y = y_start + sum(line_heights[:i]) + gap * i
+            # Black outline
+            for dx in range(-outline, outline + 1):
+                for dy in range(-outline, outline + 1):
+                    if dx or dy:
+                        draw.text((x + dx, y + dy), line, font=font, fill=(0, 0, 0))
+            # White fill
+            draw.text((x, y), line, font=font, fill=(255, 255, 255))
 
         out_tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
         img.save(out_tmp.name, "JPEG", quality=95)
@@ -370,11 +406,11 @@ def _burn_hook_text(image_url: str, hook_text: str) -> str:
 
         os.unlink(img_tmp.name)
         os.unlink(out_tmp.name)
-        logging.info(f"Hook text '{text}' burned onto thumbnail → {new_url[:60]}")
+        logging.info(f"Title '{text[:60]}' burned onto thumbnail ({font_size}px, {len(lines)} line(s))")
         return new_url
     except Exception as e:
-        logging.error(f"PIL hook text overlay failed: {e}")
-        return image_url  # return original if overlay fails
+        logging.error(f"PIL title overlay failed: {e}")
+        return image_url
 
 
 def generate_thumbnail(image_prompt: str, hook_text: str = "") -> str:
