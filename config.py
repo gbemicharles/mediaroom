@@ -209,19 +209,18 @@ Then, write the Russian translation.
 
 # 6. AI HOST PHOTO PROMPT
 
-Write an English prompt to generate a still image of the channel's permanent AI host.
+Write an English prompt to generate a still portrait image of the channel's permanent AI host.
+The host's physical description is provided in the instruction block above — use it as the subject of your prompt exactly as described.
 
-Preserve exactly across all videos (identity consistency):
-• Face, facial features, and bone structure
-• Hairstyle and hair color
-• Approximate age and ethnicity
-• Voice and presence feel
-
-Adapt to this specific video's context:
-• Period-appropriate clothing and accessories
-• Location and environmental setting that fits the topic
-• Lighting and atmosphere that matches the emotional tone
-• Expression: calm authority, not neutral blankness
+Rules:
+• Open with the physical description of the host (age, ethnicity, hair, features) — do not invent a different person.
+• NEVER dress him in modern clothing (no suits, no dress shirts, no contemporary fashion of any kind).
+• Clothing must be authentic to the historical era or natural environment of this video's topic.
+  Examples: ancient Roman linen tunic, medieval wool cloak, Ottoman silk kaftan, Edo-period kimono, Viking fur mantle, Renaissance velvet doublet, etc.
+• The setting must reflect the video's world — a Roman forum, a medieval monastery, an Ottoman palace courtyard, a prehistoric cliff at dawn, etc.
+• Lighting and atmosphere must match the emotional tone: warm golden hour for ancient epics, cold blue moonlight for dark history, misty dawn for prehistoric or nature topics.
+• Expression: calm, intelligent, and welcoming — never blank or aggressive.
+• End with quality tags: photorealistic, ultra realistic, cinematic lighting, shallow depth of field, 8K, premium Netflix documentary portrait.
 
 Quality benchmark: This must look like a premium Netflix limited-series portrait — cinematic grade, photorealistic, gallery-level composition.
 

@@ -16,6 +16,25 @@ openrouter_client = OpenAI(
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 # Replicate automatically picks up REPLICATE_API_TOKEN from env vars
 
+# Physical appearance descriptions for each avatar character.
+# Used to ground Section 6 (AI HOST PHOTO PROMPT) so the LLM dresses
+# the correct person in period-appropriate clothing, never modern.
+AVATAR_APPEARANCE = {
+    "English":    "Northern European male, approximately 38 years old, short dark brown hair, clean-shaven, calm blue-grey eyes, strong jaw",
+    "Spanish":    "Mediterranean male, approximately 40 years old, dark wavy hair, warm olive skin, expressive dark eyes, short beard",
+    "French":     "Western European male, approximately 35 years old, medium-length styled dark hair, refined angular features, confident bearing",
+    "German":     "Germanic male, approximately 36 years old, short blonde-brown hair, athletic build, sharp defined features, clean-shaven",
+    "Portuguese": "Mediterranean male, approximately 40 years old, dark wavy hair, warm olive skin, expressive dark eyes, short beard",
+    "Italian":    "Western European male, approximately 35 years old, medium-length styled dark hair, refined angular features, confident bearing",
+    "Chinese":    "East Asian male, approximately 32 years old, neat short black hair, refined scholarly appearance, calm dark eyes",
+    "Japanese":   "East Asian male, approximately 32 years old, neat short black hair, refined scholarly appearance, calm dark eyes",
+    "Russian":    "Eastern European male, approximately 45 years old, salt-and-pepper short hair, distinguished mature features, strong weathered presence",
+    "Polish":     "Eastern European male, approximately 45 years old, salt-and-pepper short hair, distinguished mature features, strong weathered presence",
+    "Romanian":   "Eastern European male, approximately 45 years old, salt-and-pepper short hair, distinguished mature features, strong weathered presence",
+    "Turkish":    "Mixed heritage male, approximately 33 years old, short textured dark hair, warm olive-brown skin, open friendly face, light stubble",
+}
+
+
 def split_transcript_into_chunks(text: str, max_chars: int = 10000) -> list[str]:
     """Split a transcript at sentence boundaries so each chunk is ≤ max_chars."""
     if len(text) <= max_chars:
@@ -153,9 +172,13 @@ def generate_text_and_extract_prompt(transcript: str, system_prompt: str, target
     and format the transcript into paragraphs with the channel's custom introduction.
     """
     if "Production Pack" in system_prompt or "premium media studio" in system_prompt:
+        # Look up the avatar appearance for this language (fall back to English)
+        _avatar_appearance = AVATAR_APPEARANCE.get(target_lang, AVATAR_APPEARANCE["English"])
         lang_instruction = (
             f"\n\nCRITICAL LANGUAGE AND SCRIPT REWRITE INSTRUCTION:\n"
-            f"The target language for this request is {target_lang}.\n"
+            f"The target language for this request is {target_lang}.\n\n"
+            f"AI HOST CHARACTER — the permanent host for {target_lang} content is: {_avatar_appearance}.\n"
+            f"Use this description as the subject in Section 6 (AI HOST PHOTO PROMPT).\n\n"
             f"OUTPUT ORDER IS MANDATORY — follow this sequence exactly:\n\n"
             f"STEP A — Output these XML blocks FIRST, before anything else:\n"
             f"  A1. Literally and professionally translate the following channel introduction into {target_lang} "
@@ -648,6 +671,24 @@ def generate_intro_video(intro_text: str, target_lang: str, image_prompt: str = 
     # "bedtime" theme → sofa/casual variants (warmer, more intimate feel)
     # "adventure/nature" theme → outdoor/gym variants
     # "educational/general" → office/training variants (default)
+    # Physical appearance descriptions for each avatar character.
+    # Used to ground Section 7 (AI HOST PHOTO PROMPT) so the LLM can
+    # dress the correct person in period-appropriate clothing.
+    AVATAR_APPEARANCE = {
+        "English":    "Northern European male, approximately 38 years old, short dark brown hair, clean-shaven, calm blue-grey eyes, strong jaw",
+        "Spanish":    "Mediterranean male, approximately 40 years old, dark wavy hair, warm olive skin, expressive dark eyes, short beard",
+        "French":     "Western European male, approximately 35 years old, medium-length styled dark hair, refined angular features, confident bearing",
+        "German":     "Germanic male, approximately 36 years old, short blonde-brown hair, athletic build, sharp defined features, clean-shaven",
+        "Portuguese": "Mediterranean male, approximately 40 years old, dark wavy hair, warm olive skin, expressive dark eyes, short beard",
+        "Italian":    "Western European male, approximately 35 years old, medium-length styled dark hair, refined angular features, confident bearing",
+        "Chinese":    "East Asian male, approximately 32 years old, neat short black hair, refined scholarly appearance, calm dark eyes",
+        "Japanese":   "East Asian male, approximately 32 years old, neat short black hair, refined scholarly appearance, calm dark eyes",
+        "Russian":    "Eastern European male, approximately 45 years old, salt-and-pepper short hair, distinguished mature features, strong weathered presence",
+        "Polish":     "Eastern European male, approximately 45 years old, salt-and-pepper short hair, distinguished mature features, strong weathered presence",
+        "Romanian":   "Eastern European male, approximately 45 years old, salt-and-pepper short hair, distinguished mature features, strong weathered presence",
+        "Turkish":    "Mixed heritage male, approximately 33 years old, short textured dark hair, warm olive-brown skin, open friendly face, light stubble",
+    }
+
     AVATAR_ID = {
         # ── defaults (educational / general) ─────────────────────────────────
         "English":    "Noah_standing_office_front",
