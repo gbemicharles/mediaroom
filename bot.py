@@ -731,34 +731,31 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             logging.info("STEP 6: Calling generate_thumbnail (parallel)")
             url = await asyncio.to_thread(generate_thumbnail, image_prompt, hook_text)
             logging.info(f"STEP 6 done: {url[:80] if url else 'EMPTY'}")
+            # ── Deliver thumbnail immediately when ready ───────────────────────
+            if url:
+                await context.bot.send_photo(
+                    chat_id=chat_id, photo=url,
+                    caption="🖼️ <b>Generated Thumbnail</b>", parse_mode="HTML"
+                )
+            else:
+                await _send_html(context.bot, chat_id, "❌ <b>Thumbnail generation failed.</b>")
             return url
 
         async def _gen_video():
             logging.info("STEP 8: Calling generate_intro_video (parallel)")
             url = await asyncio.to_thread(generate_intro_video, intro_for_video, target_lang)
             logging.info(f"STEP 8 done: {url[:80] if url else 'EMPTY'}")
+            # ── Deliver video immediately when ready ───────────────────────────
+            if url:
+                await context.bot.send_video(
+                    chat_id=chat_id, video=url,
+                    caption="🎞️ <b>AI Host Intro</b>", parse_mode="HTML"
+                )
+            else:
+                await _send_html(context.bot, chat_id, "❌ <b>Intro video generation failed.</b>")
             return url
 
         image_url, video_url = await asyncio.gather(_gen_thumbnail(), _gen_video())
-
-        # ── Deliver thumbnail ─────────────────────────────────────────────────
-        if has_thumbnail_prompt:
-            if image_url:
-                await context.bot.send_photo(
-                    chat_id=chat_id, photo=image_url,
-                    caption="🖼️ <b>Generated Thumbnail</b>", parse_mode="HTML"
-                )
-            else:
-                await _send_html(context.bot, chat_id, "❌ <b>Thumbnail generation failed.</b>")
-
-        # ── Deliver intro video ───────────────────────────────────────────────
-        if video_url:
-            await context.bot.send_video(
-                chat_id=chat_id, video=video_url,
-                caption="🎞️ <b>AI Host Intro</b>", parse_mode="HTML"
-            )
-        else:
-            await _send_html(context.bot, chat_id, "❌ <b>Intro video generation failed.</b>")
 
         # ── Summary card ─────────────────────────────────────────────────────
         has_thumbnail = bool(image_prompt and image_prompt != "A generic YouTube thumbnail")

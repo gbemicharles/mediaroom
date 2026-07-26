@@ -646,7 +646,11 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
             logging.info(f"HeyGen video ready: {video_url[:80]}")
             return video_url
         elif status == "failed":
-            logging.error(f"HeyGen job failed: {status_data.get('error', 'unknown')}")
+            reason = (status_data.get("failure_message")
+                      or status_data.get("failure_code")
+                      or status_data.get("error")
+                      or "unknown")
+            logging.error(f"HeyGen job failed: {reason}")
             return ""
 
     logging.error("HeyGen polling timed out after 3 minutes")
