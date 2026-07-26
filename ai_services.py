@@ -481,19 +481,21 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
     import requests
 
     # ── Culturally matched full-body standing male avatars ────────────────────
+    # Only Avatar-V-compatible IDs work with script+voice_id on /v3/videos.
+    # Jin/Onat/Marcus/Jinwoo/Aditya/Ivan are Avatar IV only and return 400.
     AVATAR_ID = {
-        "English":    "Marcus_Suit_Front_public",              # Black male, professional suit
-        "Spanish":    "Raul_standing_office_front",            # Hispanic male, office
+        "English":    "Noah_standing_office_front",            # Western male, office standing
+        "Spanish":    "Raul_standing_office_front",            # Hispanic male, office standing
         "French":     "Vince_standing_businesstraining_front", # Southern-European, training stance
-        "German":     "Jonas_standing_gym_front",              # Athletic European male
-        "Portuguese": "Raul_standing_casualsofa_front",        # Hispanic/Brazilian, casual
-        "Italian":    "Vince_standing_sofacasual_front",       # Southern-European, casual
-        "Chinese":    "Jin_Suit_Front_public",                 # East-Asian male, suit
-        "Japanese":   "Ren_standing_office_front",             # East-Asian male, office
+        "German":     "Jonas_standing_gym_front",              # Athletic European male, standing
+        "Portuguese": "Raul_standing_office_front",            # Hispanic/Brazilian, office standing
+        "Italian":    "Vince_standing_sofacasual_front",       # Southern-European, casual standing
+        "Chinese":    "Ren_standing_office_front",             # East-Asian male, office (closest fit)
+        "Japanese":   "Ren_standing_office_front",             # East-Asian male, office standing
         "Russian":    "Teodor_standing_office_front",          # Slavic/Eastern-European, office
-        "Polish":     "Teodor_standing_sofa_front",            # Slavic/Eastern-European, sofa
-        "Romanian":   "Teodor_standing_sofa_front",            # Slavic/Eastern-European, sofa
-        "Turkish":    "Onat_Suit_Front_public",                # Middle-Eastern/Turkish, suit
+        "Polish":     "Teodor_standing_office_front",          # Slavic/Eastern-European, office
+        "Romanian":   "Teodor_standing_office_front",          # Slavic/Eastern-European, office
+        "Turkish":    "Miles_standing_outdoor_front",          # No Turkish avatar available; best neutral
     }
 
     # ── Natural male HeyGen voices per language ───────────────────────────────
