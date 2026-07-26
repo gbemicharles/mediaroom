@@ -422,14 +422,14 @@ def generate_thumbnail(image_prompt: str, hook_text: str = "") -> str:
 
 
 def generate_intro_video(intro_text: str, target_lang: str) -> str:
-    """Generate a talking-head intro video at 1280×720 (16:9).
+    """Generate a talking-head intro video with natural expressions and gestures.
 
     Pipeline:
       1. Pick the culturally-styled host photo for the target language.
-      2. Generate TTS audio (gTTS).
-      3. Use ffmpeg to create a silent 1280×720 looping video from the photo.
-      4. Upload video + audio to fal.ai storage.
-      5. Run fal-ai/sync-lipsync → high-quality lip-synced 1280×720 video.
+      2. Trim intro_text to ≤18 words (≈8 s of speech).
+      3. Generate TTS audio (gTTS) and hard-trim to 8 s with ffmpeg.
+      4. Upload photo + audio to fal.ai storage.
+      5. Run fal-ai/hedra-character-2 → expressive video with gestures matching speech.
     """
     import os
     import subprocess
@@ -446,26 +446,23 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
     photo_path = os.path.join(base_dir, "host_photos", f"{lang_code}.jpg")
     if not os.path.exists(photo_path):
         photo_path = os.path.join(base_dir, "host_photos", "en.jpg")
-
     if not os.path.exists(photo_path):
         logging.error(f"Host photo not found for lang '{lang_code}'")
         return ""
 
-    # ── Step 1: TTS via gTTS ─────────────────────────────────────────────────
+    # ── Step 1: Trim text → TTS → hard-trim audio to 8 s ────────────────────
     GTTS_LANG = {
         "English": "en", "Spanish": "es", "French": "fr", "German": "de",
         "Portuguese": "pt", "Italian": "it", "Chinese": "zh-CN", "Japanese": "ja",
         "Russian": "ru", "Polish": "pl", "Romanian": "ro", "Turkish": "tr",
     }
+    MAX_SECS = 8
 
-    # Trim intro_text to ≤18 words so TTS stays inside 8 seconds
     words = intro_text.split()
     if len(words) > 18:
         intro_text = " ".join(words[:18])
-    MAX_SECS = 8
 
     audio_path = None
-    video_path = None
     try:
         from gtts import gTTS
         gtts_lang = GTTS_LANG.get(target_lang, "en")
@@ -474,7 +471,6 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         tts.save(raw_tmp.name)
         raw_path = raw_tmp.name
 
-        # Hard-trim to MAX_SECS with ffmpeg so the audio never exceeds 8 s
         audio_tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
         audio_tmp.close()
         subprocess.run(
@@ -486,87 +482,47 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         audio_path = audio_tmp.name
         logging.info(f"TTS (gTTS/{gtts_lang}) trimmed to {MAX_SECS}s: {audio_path}")
     except Exception as e:
-        logging.error(f"gTTS failed: {e}")
+        logging.error(f"gTTS / audio trim failed: {e}")
         return ""
 
-    # ── Step 2: Build a 1280×720 looping video from the host photo ───────────
-    # Cinematic vf chain: scale/pad → warm colour grade → vignette
-    CINEMATIC_VF = (
-        "scale=1280:720:force_original_aspect_ratio=decrease,"
-        "pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,"
-        # Warm grade: lift reds slightly, cool down blues
-        "curves=r='0/0 0.25/0.27 0.75/0.80 1/1':b='0/0 0.25/0.22 0.75/0.68 1/0.88',"
-        # Soft vignette
-        "vignette=angle=PI/4:mode=backward"
-    )
-    try:
-        video_tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-        video_tmp.close()
-        video_path = video_tmp.name
-
-        subprocess.run(
-            [
-                "ffmpeg", "-y",
-                "-loop", "1",
-                "-i", photo_path,
-                "-c:v", "libx264",
-                "-t", str(MAX_SECS + 1),   # 1s pad; sync-lipsync trims to audio length
-                "-pix_fmt", "yuv420p",
-                "-vf", CINEMATIC_VF,
-                "-r", "25",
-                "-preset", "fast",
-                video_path,
-            ],
-            check=True,
-            capture_output=True,
-        )
-        logging.info(f"ffmpeg silent video: {video_path} ({MAX_SECS+1}s, 1280×720, cinematic grade)")
-    except Exception as e:
-        logging.error(f"ffmpeg video creation failed: {e}")
+    # ── Step 2: Upload photo + audio; run Hedra Character 2 ──────────────────
+    if not FAL_API_KEY:
+        logging.error("FAL_API_KEY not set — cannot run Hedra")
         if audio_path and os.path.exists(audio_path):
             os.unlink(audio_path)
-        return ""
-
-    # ── Step 3: Upload to fal storage & run sync-lipsync ─────────────────────
-    if not FAL_API_KEY:
-        logging.error("FAL_API_KEY not set — cannot run lip-sync")
-        for p in (audio_path, video_path):
-            if p and os.path.exists(p):
-                os.unlink(p)
         return ""
 
     try:
         os.environ["FAL_KEY"] = FAL_API_KEY
 
-        video_url = fal_client.upload_file(video_path)
+        photo_url = fal_client.upload_file(photo_path)
         audio_url = fal_client.upload_file(audio_path)
-        logging.info(f"Uploaded video → {video_url[:60]}")
+        logging.info(f"Uploaded photo → {photo_url[:60]}")
         logging.info(f"Uploaded audio → {audio_url[:60]}")
 
         result = fal_client.subscribe(
-            "fal-ai/sync-lipsync",
+            "fal-ai/hedra-character-2",
             arguments={
-                "video_url": video_url,
+                "portrait_image_url": photo_url,
                 "audio_url": audio_url,
-                "model": "lipsync-1.9.0-beta",
-                "sync_mode": "bounce",
-                "output_format": "mp4",
+                "aspect_ratio": "16:9",
             },
         )
+        # Hedra returns the video under different keys depending on version
         out_url = (
             result.get("video", {}).get("url", "")
             or result.get("video_url", "")
+            or (result.get("video") if isinstance(result.get("video"), str) else "")
             or ""
         )
-        logging.info(f"Lip-sync video URL: {out_url[:80] if out_url else 'EMPTY'}")
+        logging.info(f"Hedra video URL: {out_url[:80] if out_url else 'EMPTY'}")
         return out_url
     except Exception as e:
-        logging.error(f"fal.ai sync-lipsync error: {e}")
+        logging.error(f"fal.ai Hedra error: {e}")
         return ""
     finally:
-        for p in (audio_path, video_path):
-            if p and os.path.exists(p):
-                try:
-                    os.unlink(p)
-                except Exception:
-                    pass
+        if audio_path and os.path.exists(audio_path):
+            try:
+                os.unlink(audio_path)
+            except Exception:
+                pass
