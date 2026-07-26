@@ -500,25 +500,52 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         logging.info(f"Uploaded photo → {photo_url[:60]}")
         logging.info(f"Uploaded audio → {audio_url[:60]}")
 
-        result = fal_client.subscribe(
-            "fal-ai/hedra-character-2",
+        # ── 2a: Kling i2v — animate the photo with natural gestures ─────────
+        kling_result = fal_client.subscribe(
+            "fal-ai/kling-video/v1.6/standard/image-to-video",
             arguments={
-                "portrait_image_url": photo_url,
-                "audio_url": audio_url,
+                "image_url": photo_url,
+                "prompt": (
+                    "Person speaking warmly and naturally, gentle expressive hand gestures, "
+                    "subtle head nods, authentic facial expressions matching speech, "
+                    "cinematic golden-hour lighting, slight body sway, realistic"
+                ),
+                "duration": "10",
                 "aspect_ratio": "16:9",
             },
         )
-        # Hedra returns the video under different keys depending on version
-        out_url = (
-            result.get("video", {}).get("url", "")
-            or result.get("video_url", "")
-            or (result.get("video") if isinstance(result.get("video"), str) else "")
+        kling_video_url = (
+            kling_result.get("video", {}).get("url", "")
+            or kling_result.get("video_url", "")
+            or (kling_result.get("video") if isinstance(kling_result.get("video"), str) else "")
             or ""
         )
-        logging.info(f"Hedra video URL: {out_url[:80] if out_url else 'EMPTY'}")
+        if not kling_video_url:
+            logging.error(f"Kling returned no video URL. Result: {kling_result}")
+            return ""
+        logging.info(f"Kling video: {kling_video_url[:80]}")
+
+        # ── 2b: sync-lipsync — overlay accurate lip movement ─────────────────
+        lipsync_result = fal_client.subscribe(
+            "fal-ai/sync-lipsync",
+            arguments={
+                "video_url": kling_video_url,
+                "audio_url": audio_url,
+                "model": "lipsync-1.9.0-beta",
+                "sync_mode": "bounce",
+                "output_format": "mp4",
+            },
+        )
+        out_url = (
+            lipsync_result.get("video", {}).get("url", "")
+            or lipsync_result.get("video_url", "")
+            or (lipsync_result.get("video") if isinstance(lipsync_result.get("video"), str) else "")
+            or ""
+        )
+        logging.info(f"Final video URL: {out_url[:80] if out_url else 'EMPTY'}")
         return out_url
     except Exception as e:
-        logging.error(f"fal.ai Hedra error: {e}")
+        logging.error(f"fal.ai intro video error: {e}")
         return ""
     finally:
         if audio_path and os.path.exists(audio_path):
