@@ -134,10 +134,12 @@ Then provide:
 
 --------------------------------------------------
 
-# 3. SEO DESCRIPTION
+# 3. SEO DESCRIPTION & HASHTAGS
 
-YouTube's algorithm reads this for topical relevance. Viewers read the first two lines to decide whether to watch.
-Write it in two stages:
+YouTube's algorithm reads the description for topical relevance. Viewers read the first two lines to decide whether to watch.
+Hashtags appear above the title — they are clickable discovery tools, not decoration.
+
+Write in two stages. In each stage, place the hashtags on a new line immediately after the description body — so the entire block (description + hashtags) can be copied as one unit.
 
 STAGE 1 — TARGET LANGUAGE VERSION:
 
@@ -155,26 +157,17 @@ CTA block:
 • Subscribe prompt with reason (e.g. "New story every week — subscribe so you never miss one")
 • One engagement prompt (e.g. "Tell us in the comments: which part surprised you most?")
 
+Hashtags (on a new line immediately after the CTA block — no blank line between them):
+• 3 hashtags only. More than 5 dilutes authority.
+• Formula: 1 broad category (e.g. #History) + 1 niche topic + 1 channel brand/format (e.g. #SleepStories)
+• Write in the target language. Do not repeat words from the title.
+
 STAGE 2 — RUSSIAN TRANSLATION:
-Translate the full description faithfully into Russian.
+Translate the full description faithfully into Russian, then place the Russian hashtag equivalents on the line immediately after the Russian CTA block.
 
 --------------------------------------------------
 
-# 4. HASHTAGS
-
-YouTube displays hashtags above the title — they are clickable discovery tools, not decoration.
-Strategy: 3 hashtags only. More than 5 dilutes authority.
-
-Formula:
-• 1 broad category hashtag (e.g. #History, #Documentary)
-• 1 niche topic hashtag (specific to this video's subject)
-• 1 channel brand or format hashtag (e.g. #SleepStories, #HistoryBeforeBed)
-
-Write them in the target language. Do not repeat words from the title.
-
---------------------------------------------------
-
-# 5. TAGS
+# 4. TAGS
 
 Tags map the video into YouTube's topic graph. They determine which other videos yours appears alongside.
 Total character budget: 400–450 characters. Use all of it.
@@ -190,7 +183,7 @@ Separate each tag with a comma. Write in the target language. No hashtag symbols
 
 --------------------------------------------------
 
-# 6. AI HOST SCRIPT
+# 5. AI HOST SCRIPT
 
 This is the first thing the viewer hears. It determines whether they stay or leave.
 The opening 7 seconds must do two things simultaneously: create immediate curiosity AND feel calm and trustworthy.
@@ -210,7 +203,7 @@ Then, write the Russian translation.
 
 --------------------------------------------------
 
-# 7. AI HOST PHOTO PROMPT
+# 6. AI HOST PHOTO PROMPT
 
 Write an English prompt to generate a still image of the channel's permanent AI host.
 
@@ -230,7 +223,7 @@ Quality benchmark: This must look like a premium Netflix limited-series portrait
 
 --------------------------------------------------
 
-# 8. THUMBNAIL PROMPT
+# 7. THUMBNAIL PROMPT
 
 This is the single most important output in this entire workflow.
 The thumbnail is an advertisement for the video. It runs millions of impressions.
@@ -317,7 +310,7 @@ STRICTLY FORBIDDEN:
 
 CRITICAL INSTRUCTION: Wrap the final image prompt inside <thumbnail_prompt>...</thumbnail_prompt> tags.
 Example:
-# 8. THUMBNAIL PROMPT
+# 7. THUMBNAIL PROMPT
 <thumbnail_prompt>Cinematic RAW close-up of...</thumbnail_prompt>
 """
 
