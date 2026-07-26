@@ -458,30 +458,48 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         "Russian": "ru", "Polish": "pl", "Romanian": "ro", "Turkish": "tr",
     }
 
+    # Trim intro_text to ≤18 words so TTS stays inside 8 seconds
+    words = intro_text.split()
+    if len(words) > 18:
+        intro_text = " ".join(words[:18])
+    MAX_SECS = 8
+
     audio_path = None
     video_path = None
     try:
         from gtts import gTTS
         gtts_lang = GTTS_LANG.get(target_lang, "en")
         tts = gTTS(text=intro_text, lang=gtts_lang, slow=False)
+        raw_tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+        tts.save(raw_tmp.name)
+        raw_path = raw_tmp.name
+
+        # Hard-trim to MAX_SECS with ffmpeg so the audio never exceeds 8 s
         audio_tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
-        tts.save(audio_tmp.name)
+        audio_tmp.close()
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", raw_path, "-t", str(MAX_SECS),
+             "-acodec", "copy", audio_tmp.name],
+            check=True, capture_output=True,
+        )
+        os.unlink(raw_path)
         audio_path = audio_tmp.name
-        logging.info(f"TTS (gTTS/{gtts_lang}) generated: {audio_path}")
+        logging.info(f"TTS (gTTS/{gtts_lang}) trimmed to {MAX_SECS}s: {audio_path}")
     except Exception as e:
         logging.error(f"gTTS failed: {e}")
         return ""
 
     # ── Step 2: Build a 1280×720 looping video from the host photo ───────────
+    # Cinematic vf chain: scale/pad → warm colour grade → vignette
+    CINEMATIC_VF = (
+        "scale=1280:720:force_original_aspect_ratio=decrease,"
+        "pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,"
+        # Warm grade: lift reds slightly, cool down blues
+        "curves=r='0/0 0.25/0.27 0.75/0.80 1/1':b='0/0 0.25/0.22 0.75/0.68 1/0.88',"
+        # Soft vignette
+        "vignette=angle=PI/4:mode=backward"
+    )
     try:
-        # Get audio duration so the video is long enough
-        probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", audio_path],
-            capture_output=True, text=True
-        )
-        audio_dur = float(probe.stdout.strip() or "60") + 2  # +2s safety pad
-
         video_tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
         video_tmp.close()
         video_path = video_tmp.name
@@ -492,11 +510,9 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
                 "-loop", "1",
                 "-i", photo_path,
                 "-c:v", "libx264",
-                "-t", str(audio_dur),
+                "-t", str(MAX_SECS + 1),   # 1s pad; sync-lipsync trims to audio length
                 "-pix_fmt", "yuv420p",
-                # Scale to 1280×720; pad if photo isn't exactly 16:9
-                "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,"
-                       "pad=1280:720:(ow-iw)/2:(oh-ih)/2:black",
+                "-vf", CINEMATIC_VF,
                 "-r", "25",
                 "-preset", "fast",
                 video_path,
@@ -504,7 +520,7 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
             check=True,
             capture_output=True,
         )
-        logging.info(f"ffmpeg silent video: {video_path} ({audio_dur:.1f}s, 1280×720)")
+        logging.info(f"ffmpeg silent video: {video_path} ({MAX_SECS+1}s, 1280×720, cinematic grade)")
     except Exception as e:
         logging.error(f"ffmpeg video creation failed: {e}")
         if audio_path and os.path.exists(audio_path):
