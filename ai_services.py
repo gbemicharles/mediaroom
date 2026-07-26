@@ -382,7 +382,7 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         logging.error(f"Host photo not found for lang '{lang_code}'")
         return ""
 
-    # ── Step 1: TTS — OpenAI (primary) → gTTS (fallback) ────────────────────
+    # ── Step 1: TTS via gTTS (free, no API key required) ────────────────────
     GTTS_LANG = {
         "English": "en", "Spanish": "es", "French": "fr", "German": "de",
         "Portuguese": "pt", "Italian": "it", "Chinese": "zh-CN", "Japanese": "ja",
@@ -390,38 +390,17 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
     }
 
     audio_path = None
-
-    # Primary: OpenAI tts-1-hd (best quality)
-    if OPENAI_API_KEY:
-        try:
-            tts_client = OpenAI(api_key=OPENAI_API_KEY)
-            tts_response = tts_client.audio.speech.create(
-                model="tts-1-hd",
-                voice="onyx",
-                input=intro_text,
-                speed=0.92,
-            )
-            audio_tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
-            audio_tmp.write(tts_response.content)
-            audio_tmp.close()
-            audio_path = audio_tmp.name
-            logging.info(f"TTS (OpenAI) generated: {audio_path}")
-        except Exception as e:
-            logging.warning(f"OpenAI TTS failed ({e}), falling back to gTTS")
-
-    # Fallback: gTTS (free, no API key required)
-    if not audio_path:
-        try:
-            from gtts import gTTS
-            gtts_lang = GTTS_LANG.get(target_lang, "en")
-            tts = gTTS(text=intro_text, lang=gtts_lang, slow=False)
-            audio_tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
-            tts.save(audio_tmp.name)
-            audio_path = audio_tmp.name
-            logging.info(f"TTS (gTTS/{gtts_lang}) generated: {audio_path}")
-        except Exception as e:
-            logging.error(f"gTTS also failed: {e}")
-            return ""
+    try:
+        from gtts import gTTS
+        gtts_lang = GTTS_LANG.get(target_lang, "en")
+        tts = gTTS(text=intro_text, lang=gtts_lang, slow=False)
+        audio_tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+        tts.save(audio_tmp.name)
+        audio_path = audio_tmp.name
+        logging.info(f"TTS (gTTS/{gtts_lang}) generated: {audio_path}")
+    except Exception as e:
+        logging.error(f"gTTS failed: {e}")
+        return ""
 
     # ── Step 2: Upload to fal storage & run lip-sync ─────────────────────────
     if not FAL_API_KEY:
