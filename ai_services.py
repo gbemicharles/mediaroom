@@ -340,162 +340,12 @@ A close-up studio portrait of a 45-year-old male historian with short grey hair 
 
     return full_text, thumbnail_prompt, final_transcript
 
-def _pick_font_path(text: str) -> str:
-    """Return best available font path for the given text's script."""
-    import os
-    BASE = os.path.dirname(os.path.abspath(__file__))
-
-    def _has(path): return os.path.exists(path)
-
-    # Detect script by Unicode range
-    has_cjk      = any('\u4e00' <= c <= '\u9fff' or '\u3040' <= c <= '\u30ff' for c in text)
-    has_cyrillic = any('\u0400' <= c <= '\u04ff' for c in text)
-
-    cjk_font  = os.path.join(BASE, "fonts", "NotoSansCJK.otf")
-    noto_font = os.path.join(BASE, "fonts", "NotoSans.ttf")
-    bebas     = os.path.join(BASE, "fonts", "BebasNeue.ttf")
-    dejavu    = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-
-    if has_cjk and _has(cjk_font):
-        return cjk_font
-    if has_cyrillic and _has(noto_font):
-        return noto_font
-    if _has(bebas):
-        return bebas          # Bebas Neue — condensed, cinematic, all-caps
-    if _has(noto_font):
-        return noto_font
-    return dejavu             # system fallback
 
 
-def _burn_hook_text(image_url: str, hook_text: str) -> str:
-    """Download thumbnail, burn cinematic gold title text with PIL, re-upload.
-
-    Style matches premium YouTube thumbnails:
-    • Bebas Neue / Noto font (script-aware)
-    • Gold fill (#FFD700) with deep drop shadow — no dark bar
-    • Large, upper-center placement
-    """
-    import os, tempfile, requests
-    from PIL import Image, ImageDraw, ImageFont
-
-    TARGET_WIDTH_RATIO = 0.86   # text spans up to 86 % of width
-
-    def _best_wrap(draw, text: str, W: int, H: int, font_path: str):
-        words = text.split()
-        best  = (None, None, 0)          # (lines, font, font_size)
-        candidates = [" ".join(words)]
-        for split in range(1, len(words)):
-            candidates.append(" ".join(words[:split]) + "\n" + " ".join(words[split:]))
-        for candidate in candidates:
-            lines = candidate.split("\n")
-            if len(lines) > 2:
-                continue
-            # Allow generous size: H//2 for 1 line, H//3 per line for 2 lines
-            max_size = H // (2 if len(lines) == 1 else 3)
-            lo, hi, chosen_size = 10, max_size, 10
-            while lo <= hi:
-                mid = (lo + hi) // 2
-                f   = ImageFont.truetype(font_path, mid)
-                max_w = max(draw.textbbox((0, 0), l, font=f)[2] for l in lines)
-                if max_w <= W * TARGET_WIDTH_RATIO:
-                    chosen_size = mid; lo = mid + 1
-                else:
-                    hi = mid - 1
-            if chosen_size > best[2]:
-                best = (lines, ImageFont.truetype(font_path, chosen_size), chosen_size)
-        return best[0], best[1], best[2]
-
-    try:
-        # Retry up to 3 times — FAL CDN can be slow to serve a freshly-generated file
-        resp = None
-        for attempt in range(3):
-            try:
-                resp = requests.get(image_url, timeout=60)
-                resp.raise_for_status()
-                break
-            except Exception as dl_err:
-                if attempt < 2:
-                    import time
-                    logging.warning(f"_burn_hook_text download attempt {attempt+1} failed: {dl_err} — retrying in 5s")
-                    time.sleep(5)
-                else:
-                    raise
-
-        img_tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
-        img_tmp.write(resp.content)
-        img_tmp.close()
-
-        img  = Image.open(img_tmp.name).convert("RGB")
-        draw = ImageDraw.Draw(img)
-        W, H = img.size
-
-        text      = hook_text.upper().strip()
-        font_path = _pick_font_path(text)
-        lines, font, font_size = _best_wrap(draw, text, W, H, font_path)
-        if not lines or not font:
-            logging.warning("_burn_hook_text: could not fit text, returning original")
-            return image_url
-
-        # Measure block
-        line_bboxes  = [draw.textbbox((0, 0), l, font=font) for l in lines]
-        line_heights = [bb[3] - bb[1] for bb in line_bboxes]
-        line_widths  = [bb[2] - bb[0] for bb in line_bboxes]
-        gap          = max(6, font_size // 10)
-        block_h      = sum(line_heights) + gap * (len(lines) - 1)
-
-        # ── Position: upper-centre (15 % from top) ───────────────────────────
-        y_start       = int(H * 0.12)
-        shadow_offset = max(5, font_size // 16)
-        glow_r        = max(2, font_size // 35)
-
-        GOLD        = (255, 215,   0)   # #FFD700
-        DARK_AMBER  = (140,  80,   0)   # warm glow halo
-        BLACK       = (  0,   0,   0)
-
-        for i, line in enumerate(lines):
-            x = (W - line_widths[i]) // 2
-            y = y_start + sum(line_heights[:i]) + gap * i
-
-            # 1. Deep drop shadow (stacked, bottom-right)
-            for s in range(shadow_offset, 0, -1):
-                draw.text((x + s, y + s), line, font=font, fill=BLACK)
-
-            # 2. Warm amber glow halo around the text
-            for dx in range(-glow_r, glow_r + 1):
-                for dy in range(-glow_r, glow_r + 1):
-                    if dx or dy:
-                        draw.text((x + dx, y + dy), line, font=font, fill=DARK_AMBER)
-
-            # 3. Gold fill on top
-            draw.text((x, y), line, font=font, fill=GOLD)
-
-        out_tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
-        img.save(out_tmp.name, "JPEG", quality=95)
-        out_tmp.close()
-
-        os.environ["FAL_KEY"] = FAL_API_KEY
-        new_url = fal_client.upload_file(out_tmp.name)
-
-        os.unlink(img_tmp.name)
-        os.unlink(out_tmp.name)
-        font_name = os.path.basename(font_path)
-        logging.info(f"Title '{text[:60]}' burned ({font_size}px {font_name}, gold, {len(lines)} line(s))")
-        return new_url
-    except Exception as e:
-        logging.error(f"PIL title overlay failed: {e}")
-        return image_url
-
-
-def generate_thumbnail(image_prompt: str, hook_text: str = "") -> str:
-    """Generate a FLUX 1.1 Pro thumbnail and burn hook text on top with PIL."""
+def generate_thumbnail(image_prompt: str) -> str:
+    """Generate a FLUX 1.1 Pro thumbnail. FLUX renders text natively from the prompt."""
     import os
     os.environ.setdefault("FAL_KEY", FAL_API_KEY or "")
-
-    # Use the image prompt as-is — do NOT ask FLUX to render text.
-    # PIL burns the hook text on top cleanly in a second pass.
-    # Injecting text into the FLUX prompt causes FLUX to render its own
-    # version which clashes with (and shows through) the PIL overlay.
-    flux_prompt = image_prompt
 
     image_url = ""
 
@@ -506,7 +356,7 @@ def generate_thumbnail(image_prompt: str, hook_text: str = "") -> str:
             result = fal_client.subscribe(
                 "fal-ai/flux-pro/v1.1",
                 arguments={
-                    "prompt": flux_prompt,
+                    "prompt": image_prompt,
                     "image_size": "landscape_16_9",
                     "output_format": "jpeg",
                     "output_quality": 100,
@@ -528,10 +378,6 @@ def generate_thumbnail(image_prompt: str, hook_text: str = "") -> str:
             image_url = str(result.url) if hasattr(result, "url") else str(result)
         except Exception as e:
             logging.error(f"Replicate thumbnail error: {e}")
-
-    # ── Burn hook text on top with PIL ───────────────────────────────────────
-    if image_url and hook_text and FAL_API_KEY:
-        image_url = _burn_hook_text(image_url, hook_text)
 
     return image_url
 

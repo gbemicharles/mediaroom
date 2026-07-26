@@ -228,93 +228,57 @@ Quality benchmark: This must look like a premium Netflix limited-series portrait
 
 # 7. THUMBNAIL PROMPT
 
-This is the single most important output in this entire workflow.
-The thumbnail is an advertisement for the video. It runs millions of impressions.
-A 1% CTR improvement at scale = tens of thousands of additional views.
-Think like a billboard designer with one second to stop a moving car.
+Write a complete English prompt for AI image generation.
+The prompt must create an ultra-realistic cinematic YouTube thumbnail optimized for maximum CTR.
+Always follow these rules:
+• one dominant historical subject occupying about 50–70% of the frame
+• maximum three important visual elements
+• cinematic composition
+• visually clean
+• historically accurate
+• premium historical realism
+• mysterious but peaceful atmosphere
+• Apple-level minimalism
+• Netflix documentary quality
+• BBC documentary quality
+• ultra realistic
+• photorealistic
+• premium cinematic lighting
+• high-end color grading
 
---------------------------------------------------
+Include an elegant title directly inside the thumbnail.
+Rules for text:
+• target language
+• premium serif font
+• positioned in the UPPER LEFT
+• maximum 30% of image width
+• one large title
+• one smaller subtitle
+The subtitle should complement the title.
 
-STEP 1 — THUMBNAIL HOOK TEXT
+Leave the LOWER LEFT CORNER completely empty for the channel branding badge.
+Never place:
+• text
+• faces
+• important objects
+• lighting effects
+inside that area.
 
-Distill the winning title into 2–4 words maximum. Target language. ALL CAPS.
-This text will appear on the thumbnail itself.
-
-Rules:
-• 2–4 words only — anything longer cannot be read at thumbnail size
-• Must create an immediate emotional reaction — shock, awe, dread, or burning curiosity
-• Must be honest — it must reflect what the video delivers
-• Think tabloid front page, not book cover
-
-Strong patterns:
-• "THEY KNEW" / "HE SURVIVED" / "IT WAS FAKE" (revelation)
-• "NO ONE ESCAPED" / "ALL OF THEM DIED" (stakes)
-• "THE REAL STORY" / "WHAT THEY HID" (forbidden knowledge)
-• "BIGGER THAN ROME" / "OLDER THAN EGYPT" (scale)
-
---------------------------------------------------
-
-STEP 2 — FLUX IMAGE GENERATION PROMPT (English only)
-
-Write a complete, detailed image generation prompt. This prompt is the creative brief for a world-class visual designer.
-The image must stop the scroll at 200×112 pixels — the size YouTube displays thumbnails.
-
-SUBJECT (the anchor of the entire image):
-• One dominant subject — a human face, a powerful figure, a charged historical object, or a dramatic scene
-• Must fill 60–80% of the frame — no empty center
-• The subject must carry weight: SIGNIFICANT, FORBIDDEN, DANGEROUS, or MONUMENTAL
-• If a face: the expression must be extreme — raw grief, fierce determination, wide-eyed awe, or cold rage
-• The viewer must feel something the instant they see it
-
-LIGHTING (the difference between amateur and cinematic):
-• Ultra-dramatic chiaroscuro — inky blacks against fierce highlights
-• Choose one light source: fire, torch, embers, cold moonlight, a single beam from above, or blood-red dusk
-• Shadows must be deep and intentional — never fill-lit, never even, never flat
-• The light must communicate the emotion of the story
-
-COLOR PALETTE (controls the emotional register instantly):
-• Commit to ONE dominant mood palette — do not mix:
-  - Power / danger: deep crimson, burnt orange, char black
-  - Dread / mystery: cold slate, icy blue, near-black
-  - Glory / scale: molten gold, amber, dark bronze
-  - Loss / tragedy: desaturated steel, muted violet, ash
-• Vivid and saturated where the light hits; pure black where it doesn't
-• Reference: Gladiator, Dune, Oppenheimer, The Last of Us, Chernobyl
-
-COMPOSITION (must work at thumbnail scale):
-• Single focal point — everything else is shadow or blur
-• Rule of thirds or centered power composition — never accidental
-• Leave the lower-left corner empty (channel logo badge goes there)
-• No more than two visual elements competing for attention
-
-TEXT ON IMAGE:
-• The hook text from Step 1 must appear directly in the image
-• Font: ultra-bold condensed sans-serif or slab-serif — white or gold
-• Size: large enough to read clearly at 200px wide
-• Outline or drop shadow: thick black, fully readable on any background
-• Placement: upper-center or upper-left — part of the composition, not floating
-
-TECHNICAL SPEC:
-• Ultra-realistic photographic RAW aesthetic — not illustrated, not rendered
-• Shot on cinema camera (ARRI Alexa, RED Monstro, or Leica SL2)
-• Shallow depth of field — razor-sharp subject, atmospheric background bokeh
-• 16:9 aspect ratio, horizontal frame
-• No watermarks, no borders, no logos
-
-STRICTLY FORBIDDEN:
-• Calm, peaceful, or neutral mood — this kills CTR
-• Anime, cartoon, illustration, CGI look
-• Soft pastel or washed-out colors
-• Cluttered frame with many equal-weight elements
-• Modern architecture or anachronistic objects
-• Generic "documentary" look — safe, flat, forgettable
-
---------------------------------------------------
+Avoid:
+• fantasy
+• anime
+• cartoon
+• CGI look
+• modern objects
+• modern architecture
+• logos
+• watermarks
+• clutter
 
 CRITICAL INSTRUCTION: Wrap the final image prompt inside <thumbnail_prompt>...</thumbnail_prompt> tags.
 Example:
 # 7. THUMBNAIL PROMPT
-<thumbnail_prompt>Cinematic RAW close-up of...</thumbnail_prompt>
+<thumbnail_prompt>A premium, cinematic, ultra-realistic photo of...</thumbnail_prompt>
 """
 
 def check_env_vars():

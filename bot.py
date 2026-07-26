@@ -793,7 +793,7 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             if not has_thumbnail_prompt:
                 return ""
             logging.info("STEP 6: Calling generate_thumbnail (parallel)")
-            url = await asyncio.to_thread(generate_thumbnail, image_prompt, hook_text)
+            url = await asyncio.to_thread(generate_thumbnail, image_prompt)
             logging.info(f"STEP 6 done: {url[:80] if url else 'EMPTY'}")
             if url:
                 await context.bot.send_photo(
@@ -941,7 +941,7 @@ async def regen_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         await context.bot.send_message(chat_id=chat_id, text="🎨 Regenerating thumbnail…")
-        url = await asyncio.to_thread(generate_thumbnail, pack['image_prompt'], pack.get('hook_text', ''))
+        url = await asyncio.to_thread(generate_thumbnail, pack['image_prompt'])
         if url:
             await context.bot.send_photo(
                 chat_id=chat_id, photo=url,
