@@ -537,64 +537,42 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         logging.info(f"Uploaded audio → {audio_url[:60]}")
 
         import concurrent.futures
-        STEP_TIMEOUT = 180  # 3 minutes per model call
+        KLING_TIMEOUT = 300  # 5 minutes — Kling i2v typically takes 2-4 min
 
         def _subscribe(model, args):
             return fal_client.subscribe(model, arguments=args)
 
-        # ── 2a: Kling i2v — animate the photo with natural gestures ─────────
-        logging.info("Starting Kling i2v (timeout 3 min)…")
+        # Single step: Kling i2v animates the host photo with gestures, expressions,
+        # and natural speech-like mouth movement. Skipping a second lipsync pass keeps
+        # the pipeline reliable (one slow model instead of two sequential slow models).
+        logging.info("Starting Kling i2v (timeout 5 min)…")
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
             fut = ex.submit(_subscribe, "fal-ai/kling-video/v1.6/standard/image-to-video", {
                 "image_url": photo_url,
                 "prompt": (
-                    "Person speaking warmly and naturally, gentle expressive hand gestures, "
-                    "subtle head nods, authentic facial expressions matching speech, "
-                    "cinematic golden-hour lighting, slight body sway, realistic"
+                    "Person speaking directly to the camera with warm, natural delivery. "
+                    "Lips moving in realistic speech rhythm, expressive eyes and eyebrows, "
+                    "gentle hand gestures that underscore the words, subtle head movement, "
+                    "authentic emotional engagement, cinematic golden-hour lighting"
                 ),
                 "duration": "10",
                 "aspect_ratio": "16:9",
             })
             try:
-                kling_result = fut.result(timeout=STEP_TIMEOUT)
+                kling_result = fut.result(timeout=KLING_TIMEOUT)
             except concurrent.futures.TimeoutError:
-                logging.error("Kling i2v timed out after 3 minutes — aborting intro video")
+                logging.error("Kling i2v timed out after 5 minutes — aborting intro video")
                 return ""
 
-        kling_video_url = (
+        out_url = (
             kling_result.get("video", {}).get("url", "")
             or kling_result.get("video_url", "")
             or (kling_result.get("video") if isinstance(kling_result.get("video"), str) else "")
             or ""
         )
-        if not kling_video_url:
-            logging.error(f"Kling returned no video URL. Result: {kling_result}")
-            return ""
-        logging.info(f"Kling video: {kling_video_url[:80]}")
-
-        # ── 2b: sync-lipsync — overlay accurate lip movement ─────────────────
-        logging.info("Starting sync-lipsync (timeout 3 min)…")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(_subscribe, "fal-ai/sync-lipsync", {
-                "video_url": kling_video_url,
-                "audio_url": audio_url,
-                "model": "lipsync-1.9.0-beta",
-                "sync_mode": "bounce",
-                "output_format": "mp4",
-            })
-            try:
-                lipsync_result = fut.result(timeout=STEP_TIMEOUT)
-            except concurrent.futures.TimeoutError:
-                logging.error("sync-lipsync timed out after 3 minutes — returning Kling video without lipsync")
-                return kling_video_url   # fall back to Kling-only video
-
-        out_url = (
-            lipsync_result.get("video", {}).get("url", "")
-            or lipsync_result.get("video_url", "")
-            or (lipsync_result.get("video") if isinstance(lipsync_result.get("video"), str) else "")
-            or ""
-        )
-        logging.info(f"Final video URL: {out_url[:80] if out_url else 'EMPTY'}")
+        if not out_url:
+            logging.error(f"Kling returned no video URL. Result keys: {list(kling_result.keys())}")
+        logging.info(f"Kling video URL: {out_url[:80] if out_url else 'EMPTY'}")
         return out_url
     except Exception as e:
         logging.error(f"fal.ai intro video error: {e}")
