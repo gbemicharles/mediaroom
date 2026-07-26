@@ -406,8 +406,20 @@ def _burn_hook_text(image_url: str, hook_text: str) -> str:
         return best[0], best[1], best[2]
 
     try:
-        resp = requests.get(image_url, timeout=30)
-        resp.raise_for_status()
+        # Retry up to 3 times — FAL CDN can be slow to serve a freshly-generated file
+        resp = None
+        for attempt in range(3):
+            try:
+                resp = requests.get(image_url, timeout=60)
+                resp.raise_for_status()
+                break
+            except Exception as dl_err:
+                if attempt < 2:
+                    import time
+                    logging.warning(f"_burn_hook_text download attempt {attempt+1} failed: {dl_err} — retrying in 5s")
+                    time.sleep(5)
+                else:
+                    raise
 
         img_tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
         img_tmp.write(resp.content)
