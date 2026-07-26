@@ -700,26 +700,11 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             # Fallback: send raw text if parsing found nothing
             await _send_html(context.bot, chat_id, _html(full_text))
 
-        # ── Thumbnail ────────────────────────────────────────────────────────
+        # ── Thumbnail + Intro video — run in parallel ─────────────────────────
         logging.info(f"STEP 5: image_prompt present: {bool(image_prompt)}")
-        if image_prompt and image_prompt != "A generic YouTube thumbnail":
-            await _send_html(
-                context.bot, chat_id,
-                f"🎨 <b>Generating thumbnail…</b>\n<i>{_html(image_prompt[:200])}</i>"
-            )
-            logging.info("STEP 6: Calling FLUX Schnell")
-            image_url = await asyncio.to_thread(generate_thumbnail, image_prompt)
-            logging.info(f"STEP 7: Thumbnail URL: {image_url[:80] if image_url else 'EMPTY'}")
 
-            if image_url:
-                await context.bot.send_photo(
-                    chat_id=chat_id, photo=image_url,
-                    caption="🖼️ <b>Generated Thumbnail</b>", parse_mode="HTML"
-                )
-            else:
-                await _send_html(context.bot, chat_id, "❌ <b>Thumbnail generation failed.</b> Check Replicate billing.")
+        has_thumbnail_prompt = bool(image_prompt and image_prompt != "A generic YouTube thumbnail")
 
-        # ── Intro video (talking-head, independent of thumbnail) ──────────────
         intro_for_video = ""
         if pack_transcript:
             intro_for_video = pack_transcript.split("\n\n")[0].strip()
@@ -727,15 +712,46 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             from config import CHANNEL_INTRODUCTION
             intro_for_video = CHANNEL_INTRODUCTION
 
+        # Send both status messages before kicking off parallel tasks
+        if has_thumbnail_prompt:
+            await _send_html(
+                context.bot, chat_id,
+                f"🎨 <b>Generating thumbnail…</b>\n<i>{_html(image_prompt[:200])}</i>"
+            )
         await _send_html(
             context.bot, chat_id,
             "🎬 <b>Generating intro video…</b>\n"
-            "<i>This takes 5–8 minutes (AI animation + lip sync). Please wait — you'll receive the video automatically when it's ready.</i>"
+            "<i>This takes 5–8 minutes (AI animation + lip sync). "
+            "Thumbnail and video are generating simultaneously — you'll receive both automatically.</i>"
         )
-        logging.info("STEP 8: Calling talking-head lip-sync video generation")
-        video_url = await asyncio.to_thread(generate_intro_video, intro_for_video, target_lang)
-        logging.info(f"STEP 9: Video URL: {video_url[:80] if video_url else 'EMPTY'}")
 
+        async def _gen_thumbnail():
+            if not has_thumbnail_prompt:
+                return ""
+            logging.info("STEP 6: Calling generate_thumbnail (parallel)")
+            url = await asyncio.to_thread(generate_thumbnail, image_prompt)
+            logging.info(f"STEP 6 done: {url[:80] if url else 'EMPTY'}")
+            return url
+
+        async def _gen_video():
+            logging.info("STEP 8: Calling generate_intro_video (parallel)")
+            url = await asyncio.to_thread(generate_intro_video, intro_for_video, target_lang)
+            logging.info(f"STEP 8 done: {url[:80] if url else 'EMPTY'}")
+            return url
+
+        image_url, video_url = await asyncio.gather(_gen_thumbnail(), _gen_video())
+
+        # ── Deliver thumbnail ─────────────────────────────────────────────────
+        if has_thumbnail_prompt:
+            if image_url:
+                await context.bot.send_photo(
+                    chat_id=chat_id, photo=image_url,
+                    caption="🖼️ <b>Generated Thumbnail</b>", parse_mode="HTML"
+                )
+            else:
+                await _send_html(context.bot, chat_id, "❌ <b>Thumbnail generation failed.</b>")
+
+        # ── Deliver intro video ───────────────────────────────────────────────
         if video_url:
             await context.bot.send_video(
                 chat_id=chat_id, video=video_url,
