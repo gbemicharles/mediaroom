@@ -639,13 +639,23 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             f"{'─' * 28}"
         )
 
+        def _is_code_block_section(header: str) -> bool:
+            """Sections whose body should be wrapped in <code> for one-tap copying."""
+            h = header.upper()
+            return "DESCRIPTION" in h or ("TAG" in h and "HASHTAG" not in h and "THUMBNAIL" not in h)
+
         sections = _parse_production_pack(full_text)
         if sections:
             for header, body in sections:
                 if not body.strip():
                     continue
-                msg = (f"<b>{_html(header)}</b>\n{'─' * 20}\n{_html(body)}" if header
-                       else _html(body))
+                if header and _is_code_block_section(header):
+                    # Plain-escape only (no markdown→HTML) so <code> stays valid
+                    safe_body = body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    msg = f"<b>{_html(header)}</b>\n{'─' * 20}\n<code>{safe_body}</code>"
+                else:
+                    msg = (f"<b>{_html(header)}</b>\n{'─' * 20}\n{_html(body)}" if header
+                           else _html(body))
                 await _send_html(context.bot, chat_id, msg)
         else:
             # Fallback: send raw text if parsing found nothing
