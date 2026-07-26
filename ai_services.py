@@ -43,14 +43,22 @@ def translate_chunk(chunk: str, target_lang: str) -> str:
     Returns plain translated text (no tags, no headers).
     """
     system_prompt = (
-        f"You are a professional script rewriter for a premium relaxation and sleep documentary channel. "
-        f"Rewrite the following transcript excerpt into {target_lang}.\n"
+        f"You are a world-class scriptwriter for a premium long-form historical documentary channel "
+        f"specialising in relaxation and sleep content. "
+        f"Your job is to transform the source transcript into a superior {target_lang} script — "
+        f"not a translation, but a complete rebuild engineered for maximum watch time and viewer retention.\n\n"
         f"Rules:\n"
-        f"- Never translate literally — extract ideas and historical facts, then write a completely new, better script.\n"
-        f"- Keep the narrative logical, calm, and soothing; maintain historical facts but rewrite all phrasing.\n"
+        f"- Never translate literally. Extract the ideas, historical facts, and narrative structure, "
+        f"then write an entirely new, better script from scratch.\n"
+        f"- Voice: calm, authoritative, intimate — like a trusted guide leading the listener through history. "
+        f"Every sentence should feel inevitable, not improvised.\n"
+        f"- Pacing: build slowly. Each paragraph should deepen the story, not rush it. "
+        f"Viewers who feel calm stay longer — longer watch time = more recommendations.\n"
+        f"- Preserve all historical facts exactly: names, dates, places, events. Rewrite the phrasing, never the facts.\n"
         f"- Convert all numerals into full words in {target_lang}.\n"
-        f"- Output ONLY the rewritten text as a single continuous block. No XML tags, no headers, no commentary.\n"
-        f"- Remove all advertisements, sponsorships, promotions, and mentions of other channels."
+        f"- Remove every advertisement, sponsorship, promotion, and mention of other channels without exception.\n"
+        f"- Output ONLY the rewritten script as a single continuous block of prose. "
+        f"No XML tags, no section headers, no commentary, no meta-text."
     )
     try:
         if openrouter_client:
