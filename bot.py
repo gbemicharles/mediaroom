@@ -589,29 +589,36 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
         full_text, image_prompt, pack_transcript = pack_result
         logging.info(f"STEP 2: pack={len(full_text)} chars, {len(translated_parts)} translated chunks")
 
-        # Extract the winning title from section 2 (WINNER) — this is what goes on the thumbnail.
-        # Format: "[Lang]: [Title]" or "🇷🇺: [Title]" — we want the target-language line, not Russian.
-        hook_text = ""
-        winner_match = re.search(
-            r'#\s*2[\.\s]+WINNER.*?\n(.*?)\n\s*(?:#\s*3|--)',
-            full_text, re.IGNORECASE | re.DOTALL
-        )
-        if winner_match:
-            block = winner_match.group(1)
+        # Extract the winning title (section 2 WINNER) to burn onto the thumbnail.
+        def _extract_winner_title(text: str) -> str:
+            """Return the target-language winning title, stripped of markdown."""
+            # Find the block between the WINNER header and the next section separator
+            m = re.search(
+                r'(?:^|\n)#?\s*2[\.\)]\s*WINNER\b(.*?)(?:\n-{3,}|\n#\s*3[\.\)])',
+                text, re.IGNORECASE | re.DOTALL,
+            )
+            block = m.group(1) if m else text   # fallback: search whole text
+
             for line in block.splitlines():
                 line = line.strip()
-                # Skip blank lines, the "why" explanation sentence, and the Russian flag line
                 if not line or '🇷🇺' in line:
                     continue
-                # Match "Lang: Title" or just a standalone title line (no colon prefix)
-                colon_match = re.match(r'^[^:]{1,30}:\s*(.+)$', line)
-                if colon_match:
-                    hook_text = colon_match.group(1).strip()
-                    break
-                # Fallback: if it looks like a title (>4 words, no period at end = not explanation)
-                if len(line.split()) >= 4 and not line.endswith('.'):
-                    hook_text = line
-                    break
+                # "Language: Title" pattern — grab the title part
+                cm = re.match(r'^[^:]{1,40}:\s*(.{10,})$', line)
+                candidate = cm.group(1).strip() if cm else ""
+                # If no colon pattern, treat the line itself as candidate if long enough
+                if not candidate and len(line.split()) >= 4:
+                    candidate = line
+                if candidate:
+                    # Strip markdown formatting (**bold**, *italic*, ## headers, etc.)
+                    candidate = re.sub(r'[\*#_`~]+', '', candidate).strip()
+                    # Must look like a title: 3-12 words, not ending with a period (prose)
+                    words = candidate.split()
+                    if 3 <= len(words) <= 12 and not candidate.endswith('.'):
+                        return candidate
+            return ""
+
+        hook_text = _extract_winner_title(full_text)
         logging.info(f"Thumbnail title extracted: {hook_text!r}")
 
         # Combine raw Haiku translations, then split into ≤999-char paragraphs
