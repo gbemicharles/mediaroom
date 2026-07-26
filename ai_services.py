@@ -418,13 +418,17 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         logging.info(f"Uploaded audio → {audio_url[:60]}")
 
         result = fal_client.subscribe(
-            "fal-ai/sync-lipsync",
+            "fal-ai/sadtalker",
             arguments={
-                "video_url": photo_url,
-                "audio_url": audio_url,
+                "source_image_url": photo_url,
+                "driven_audio_url": audio_url,
             },
         )
-        video_url = result.get("video", {}).get("url", "")
+        video_url = (
+            result.get("video", {}).get("url", "")
+            or result.get("video_url", "")
+            or ""
+        )
         logging.info(f"Lip-sync video URL: {video_url[:80] if video_url else 'EMPTY'}")
         return video_url
     except Exception as e:
