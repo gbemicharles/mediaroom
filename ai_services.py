@@ -422,15 +422,17 @@ def generate_thumbnail(image_prompt: str, hook_text: str = "") -> str:
 
 
 def generate_intro_video(intro_text: str, target_lang: str) -> str:
-    """Generate a talking-head intro video.
+    """Generate a talking-head intro video at 1280×720 (16:9).
 
     Pipeline:
       1. Pick the culturally-styled host photo for the target language.
-      2. Generate TTS audio from intro_text using OpenAI (onyx voice).
-      3. Upload both files to fal.ai storage.
-      4. Run fal-ai/sync-lipsync → returns a lip-synced video URL.
+      2. Generate TTS audio (gTTS).
+      3. Use ffmpeg to create a silent 1280×720 looping video from the photo.
+      4. Upload video + audio to fal.ai storage.
+      5. Run fal-ai/sync-lipsync → high-quality lip-synced 1280×720 video.
     """
     import os
+    import subprocess
     import tempfile
 
     # ── Language → host photo ────────────────────────────────────────────────
@@ -449,7 +451,7 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         logging.error(f"Host photo not found for lang '{lang_code}'")
         return ""
 
-    # ── Step 1: TTS via gTTS (free, no API key required) ────────────────────
+    # ── Step 1: TTS via gTTS ─────────────────────────────────────────────────
     GTTS_LANG = {
         "English": "en", "Spanish": "es", "French": "fr", "German": "de",
         "Portuguese": "pt", "Italian": "it", "Chinese": "zh-CN", "Japanese": "ja",
@@ -457,6 +459,7 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
     }
 
     audio_path = None
+    video_path = None
     try:
         from gtts import gTTS
         gtts_lang = GTTS_LANG.get(target_lang, "en")
@@ -469,38 +472,85 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         logging.error(f"gTTS failed: {e}")
         return ""
 
-    # ── Step 2: Upload to fal storage & run lip-sync ─────────────────────────
+    # ── Step 2: Build a 1280×720 looping video from the host photo ───────────
+    try:
+        # Get audio duration so the video is long enough
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", audio_path],
+            capture_output=True, text=True
+        )
+        audio_dur = float(probe.stdout.strip() or "60") + 2  # +2s safety pad
+
+        video_tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+        video_tmp.close()
+        video_path = video_tmp.name
+
+        subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-loop", "1",
+                "-i", photo_path,
+                "-c:v", "libx264",
+                "-t", str(audio_dur),
+                "-pix_fmt", "yuv420p",
+                # Scale to 1280×720; pad if photo isn't exactly 16:9
+                "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,"
+                       "pad=1280:720:(ow-iw)/2:(oh-ih)/2:black",
+                "-r", "25",
+                "-preset", "fast",
+                video_path,
+            ],
+            check=True,
+            capture_output=True,
+        )
+        logging.info(f"ffmpeg silent video: {video_path} ({audio_dur:.1f}s, 1280×720)")
+    except Exception as e:
+        logging.error(f"ffmpeg video creation failed: {e}")
+        if audio_path and os.path.exists(audio_path):
+            os.unlink(audio_path)
+        return ""
+
+    # ── Step 3: Upload to fal storage & run sync-lipsync ─────────────────────
     if not FAL_API_KEY:
         logging.error("FAL_API_KEY not set — cannot run lip-sync")
-        if audio_path:
-            os.unlink(audio_path)
+        for p in (audio_path, video_path):
+            if p and os.path.exists(p):
+                os.unlink(p)
         return ""
 
     try:
         os.environ["FAL_KEY"] = FAL_API_KEY
 
-        photo_url = fal_client.upload_file(photo_path)
+        video_url = fal_client.upload_file(video_path)
         audio_url = fal_client.upload_file(audio_path)
-        logging.info(f"Uploaded photo → {photo_url[:60]}")
+        logging.info(f"Uploaded video → {video_url[:60]}")
         logging.info(f"Uploaded audio → {audio_url[:60]}")
 
         result = fal_client.subscribe(
-            "fal-ai/sadtalker",
+            "fal-ai/sync-lipsync",
             arguments={
-                "source_image_url": photo_url,
-                "driven_audio_url": audio_url,
+                "video_url": video_url,
+                "audio_url": audio_url,
+                "model": "lipsync-1.9.0-beta",
+                "sync_mode": "bounce",
+                "output_format": "mp4",
             },
         )
-        video_url = (
+        out_url = (
             result.get("video", {}).get("url", "")
             or result.get("video_url", "")
             or ""
         )
-        logging.info(f"Lip-sync video URL: {video_url[:80] if video_url else 'EMPTY'}")
-        return video_url
+        logging.info(f"Lip-sync video URL: {out_url[:80] if out_url else 'EMPTY'}")
+        return out_url
     except Exception as e:
-        logging.error(f"fal.ai lip-sync error: {e}")
+        logging.error(f"fal.ai sync-lipsync error: {e}")
         return ""
     finally:
-        if audio_path and os.path.exists(audio_path):
-            os.unlink(audio_path)
+        for p in (audio_path, video_path):
+            if p and os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
