@@ -708,7 +708,7 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
                 f"🎨 <b>Generating thumbnail…</b>\n<i>{_html(image_prompt[:200])}</i>"
             )
             logging.info("STEP 6: Calling FLUX Schnell")
-            image_url = await asyncio.to_thread(generate_thumbnail, image_prompt, hook_text)
+            image_url = await asyncio.to_thread(generate_thumbnail, image_prompt)
             logging.info(f"STEP 7: Thumbnail URL: {image_url[:80] if image_url else 'EMPTY'}")
 
             if image_url:

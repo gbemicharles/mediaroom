@@ -486,39 +486,24 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         logging.error(f"Host photo not found for lang '{lang_code}'")
         return ""
 
-    # ── Step 1: Trim text → TTS → hard-trim audio to 8 s ────────────────────
+    # ── Step 1: Full TTS — no word or time cap ───────────────────────────────
     GTTS_LANG = {
         "English": "en", "Spanish": "es", "French": "fr", "German": "de",
         "Portuguese": "pt", "Italian": "it", "Chinese": "zh-CN", "Japanese": "ja",
         "Russian": "ru", "Polish": "pl", "Romanian": "ro", "Turkish": "tr",
     }
-    MAX_SECS = 8
-
-    words = intro_text.split()
-    if len(words) > 18:
-        intro_text = " ".join(words[:18])
 
     audio_path = None
     try:
         from gtts import gTTS
         gtts_lang = GTTS_LANG.get(target_lang, "en")
         tts = gTTS(text=intro_text, lang=gtts_lang, slow=False)
-        raw_tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
-        tts.save(raw_tmp.name)
-        raw_path = raw_tmp.name
-
         audio_tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
-        audio_tmp.close()
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", raw_path, "-t", str(MAX_SECS),
-             "-acodec", "copy", audio_tmp.name],
-            check=True, capture_output=True,
-        )
-        os.unlink(raw_path)
+        tts.save(audio_tmp.name)
         audio_path = audio_tmp.name
-        logging.info(f"TTS (gTTS/{gtts_lang}) trimmed to {MAX_SECS}s: {audio_path}")
+        logging.info(f"TTS (gTTS/{gtts_lang}) saved: {audio_path}")
     except Exception as e:
-        logging.error(f"gTTS / audio trim failed: {e}")
+        logging.error(f"gTTS failed: {e}")
         return ""
 
     # ── Step 2: Upload photo + audio; run Hedra Character 2 ──────────────────
@@ -564,16 +549,53 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
                 logging.error("Kling i2v timed out after 5 minutes — aborting intro video")
                 return ""
 
-        out_url = (
+        kling_url = (
             kling_result.get("video", {}).get("url", "")
             or kling_result.get("video_url", "")
             or (kling_result.get("video") if isinstance(kling_result.get("video"), str) else "")
             or ""
         )
-        if not out_url:
+        if not kling_url:
             logging.error(f"Kling returned no video URL. Result keys: {list(kling_result.keys())}")
-        logging.info(f"Kling video URL: {out_url[:80] if out_url else 'EMPTY'}")
-        return out_url
+            return ""
+        logging.info(f"Kling silent video: {kling_url[:80]}")
+
+        # ── Step 3: Download Kling video; loop it to audio length; merge audio ─
+        import urllib.request
+        import shutil
+
+        kling_tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+        kling_tmp.close()
+        merged_tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+        merged_tmp.close()
+        try:
+            urllib.request.urlretrieve(kling_url, kling_tmp.name)
+            logging.info(f"Downloaded Kling video → {kling_tmp.name}")
+
+            # Loop the silent video indefinitely; stop when audio track ends (-shortest)
+            subprocess.run(
+                [
+                    "ffmpeg", "-y",
+                    "-stream_loop", "-1", "-i", kling_tmp.name,
+                    "-i", audio_path,
+                    "-map", "0:v", "-map", "1:a",
+                    "-c:v", "libx264", "-c:a", "aac",
+                    "-shortest",
+                    merged_tmp.name,
+                ],
+                check=True, capture_output=True,
+            )
+            logging.info(f"Audio merged → {merged_tmp.name}")
+
+            out_url = fal_client.upload_file(merged_tmp.name)
+            logging.info(f"Final video uploaded: {out_url[:80]}")
+            return out_url
+        finally:
+            for p in (kling_tmp.name, merged_tmp.name):
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
     except Exception as e:
         logging.error(f"fal.ai intro video error: {e}")
         return ""
