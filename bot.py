@@ -743,7 +743,7 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
 
         async def _gen_video():
             logging.info("STEP 8: Calling generate_intro_video (parallel)")
-            url = await asyncio.to_thread(generate_intro_video, intro_for_video, target_lang)
+            url = await asyncio.to_thread(generate_intro_video, intro_for_video, target_lang, image_prompt)
             logging.info(f"STEP 8 done: {url[:80] if url else 'EMPTY'}")
             # ── Deliver video immediately when ready ───────────────────────────
             if url:

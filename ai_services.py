@@ -505,13 +505,72 @@ def generate_thumbnail(image_prompt: str, hook_text: str = "") -> str:
     return image_url
 
 
-def generate_intro_video(intro_text: str, target_lang: str) -> str:
+def _detect_story_theme(text: str) -> str:
+    """Classify story theme from keywords. Returns one of: bedtime, adventure, nature, educational, general."""
+    low = text.lower()
+    bedtime_kw   = {"sleep", "bedtime", "night", "dream", "relax", "story", "cozy", "peaceful",
+                    "rest", "slumber", "calm", "soothing", "lullaby", "gentle", "tonight", "drift",
+                    "unwind", "sleepy", "goodnight", "tales", "comfort", "snuggle"}
+    adventure_kw = {"adventure", "journey", "mystery", "explore", "quest", "expedition",
+                    "discover", "travel", "wander", "mission", "escape", "hero", "battle"}
+    nature_kw    = {"nature", "forest", "ocean", "mountain", "wildlife", "earth", "garden",
+                    "river", "lake", "jungle", "wilderness", "desert", "sea", "trees", "birds"}
+    edu_kw       = {"learn", "education", "guide", "explain", "science", "history", "facts",
+                    "understand", "knowledge", "discover", "research", "study", "how", "why"}
+
+    words = set(low.split())
+    scores = {
+        "bedtime":     len(words & bedtime_kw),
+        "adventure":   len(words & adventure_kw),
+        "nature":      len(words & nature_kw),
+        "educational": len(words & edu_kw),
+    }
+    best = max(scores, key=scores.get)
+    return best if scores[best] >= 1 else "general"
+
+
+def _generate_background_image(prompt: str) -> str:
+    """Generate a thematic background image via FLUX schnell (fast, cheap).
+
+    Uses the story/thumbnail prompt but strips text elements and people.
+    Returns a CDN URL or empty string on failure.
+    """
+    import os
+    if not FAL_API_KEY:
+        return ""
+    os.environ["FAL_KEY"] = FAL_API_KEY
+    bg_prompt = (
+        f"{prompt.rstrip('. ')}. "
+        "Cinematic background scene, no people, no faces, no text, no watermarks, "
+        "atmospheric lighting, high production value, suitable as a video studio background, "
+        "soft depth of field, ultra-detailed environment."
+    )
+    try:
+        result = fal_client.subscribe(
+            "fal-ai/flux/schnell",
+            arguments={
+                "prompt": bg_prompt,
+                "image_size": "landscape_16_9",
+                "num_inference_steps": 4,
+                "num_images": 1,
+            },
+        )
+        url = result["images"][0]["url"]
+        logging.info(f"Background image generated: {url[:80]}")
+        return url
+    except Exception as e:
+        logging.warning(f"Background image generation failed (non-fatal): {e}")
+        return ""
+
+
+def generate_intro_video(intro_text: str, target_lang: str, image_prompt: str = "") -> str:
     """Generate a ~10-second full-body intro video via HeyGen v3.
 
     Pipeline:
-      1. LLM condenses intro_text to ~20-28 words in target_lang.
-      2. Submit HeyGen avatar video job (full-body avatar + built-in voice + script).
-      3. Poll until complete (max 3 min) → return video URL.
+      1. Detect story theme → pick thematic avatar variant + generate background.
+      2. LLM condenses intro_text to ~20-28 words in target_lang.
+      3. Submit HeyGen avatar video job with custom background image.
+      4. Poll until complete (max 3 min) → return video URL.
     """
     import time
     import requests
@@ -519,19 +578,42 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
     # ── Culturally matched full-body standing male avatars ────────────────────
     # Only Avatar-V-compatible IDs work with script+voice_id on /v3/videos.
     # Jin/Onat/Marcus/Jinwoo/Aditya/Ivan are Avatar IV only and return 400.
+    # Variants listed here are confirmed to return 200 from prior live tests.
+    #
+    # "bedtime" theme → sofa/casual variants (warmer, more intimate feel)
+    # "adventure/nature" theme → outdoor/gym variants
+    # "educational/general" → office/training variants (default)
     AVATAR_ID = {
-        "English":    "Noah_standing_office_front",            # Western male, office standing
-        "Spanish":    "Raul_standing_office_front",            # Hispanic male, office standing
-        "French":     "Vince_standing_businesstraining_front", # Southern-European, training stance
-        "German":     "Jonas_standing_gym_front",              # Athletic European male, standing
-        "Portuguese": "Raul_standing_office_front",            # Hispanic/Brazilian, office standing
-        "Italian":    "Vince_standing_sofacasual_front",       # Southern-European, casual standing
-        "Chinese":    "Ren_standing_office_front",             # East-Asian male, office (closest fit)
-        "Japanese":   "Ren_standing_office_front",             # East-Asian male, office standing
-        "Russian":    "Teodor_standing_office_front",          # Slavic/Eastern-European, office
-        "Polish":     "Teodor_standing_office_front",          # Slavic/Eastern-European, office
-        "Romanian":   "Teodor_standing_office_front",          # Slavic/Eastern-European, office
-        "Turkish":    "Miles_standing_outdoor_front",          # No Turkish avatar available; best neutral
+        # ── defaults (educational / general) ─────────────────────────────────
+        "English":    "Noah_standing_office_front",
+        "Spanish":    "Raul_standing_office_front",
+        "French":     "Vince_standing_businesstraining_front",
+        "German":     "Jonas_standing_gym_front",
+        "Portuguese": "Raul_standing_office_front",
+        "Italian":    "Vince_standing_sofacasual_front",
+        "Chinese":    "Ren_standing_office_front",
+        "Japanese":   "Ren_standing_office_front",
+        "Russian":    "Teodor_standing_office_front",
+        "Polish":     "Teodor_standing_office_front",
+        "Romanian":   "Teodor_standing_office_front",
+        "Turkish":    "Miles_standing_outdoor_front",
+    }
+
+    # Theme overrides — only confirmed-working variants are listed here.
+    # Variants not listed fall back to the default above.
+    AVATAR_THEME_OVERRIDE = {
+        "bedtime": {
+            "English": "Noah_standing_sofa_front",          # confirmed 200
+            "French":  "Vince_standing_sofacasual_front",   # confirmed 200
+            "Italian": "Vince_standing_sofacasual_front",   # confirmed 200
+            "Turkish": "Miles_standing_sofa_front",         # confirmed 200
+        },
+        "adventure": {
+            "Turkish": "Miles_standing_outdoor_front",      # already outdoor
+        },
+        "nature": {
+            "Turkish": "Miles_standing_outdoor_front",
+        },
     }
 
     # ── Natural male HeyGen voices per language ───────────────────────────────
@@ -550,8 +632,21 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         "Turkish":    "836aa05e398543d08231f68bffdfc025",  # Deniz Yılmaz — Turkish
     }
 
-    avatar_id = AVATAR_ID.get(target_lang, AVATAR_ID["English"])
-    voice_id  = VOICE_ID.get(target_lang,  VOICE_ID["English"])
+    # ── Theme detection → pick avatar variant ────────────────────────────────
+    theme = _detect_story_theme(intro_text)
+    logging.info(f"Detected story theme: {theme!r}")
+    theme_overrides = AVATAR_THEME_OVERRIDE.get(theme, {})
+    avatar_id = theme_overrides.get(target_lang) or AVATAR_ID.get(target_lang, AVATAR_ID["English"])
+    voice_id  = VOICE_ID.get(target_lang, VOICE_ID["English"])
+    logging.info(f"Avatar: {avatar_id}  Voice: {voice_id}")
+
+    # ── Background image ──────────────────────────────────────────────────────
+    # Generate a thematic scene image from the thumbnail/story prompt (cheap FLUX schnell).
+    # Falls back gracefully — no background sent to HeyGen if generation fails.
+    bg_url = ""
+    if image_prompt:
+        logging.info("Generating thematic background image for intro video…")
+        bg_url = _generate_background_image(image_prompt)
 
     if not HEYGEN_API_KEY:
         logging.error("HEYGEN_API_KEY not set")
@@ -603,7 +698,10 @@ def generate_intro_video(intro_text: str, target_lang: str) -> str:
         "voice_id":     voice_id,
         "aspect_ratio": "16:9",
     }
-    logging.info(f"Submitting HeyGen v3 avatar job (avatar={avatar_id}, voice={voice_id})…")
+    if bg_url:
+        payload["background"] = {"type": "image", "url": bg_url}
+        logging.info(f"Background image attached: {bg_url[:80]}")
+    logging.info(f"Submitting HeyGen v3 avatar job (avatar={avatar_id}, voice={voice_id}, bg={'yes' if bg_url else 'none'})…")
     try:
         r = requests.post(
             "https://api.heygen.com/v3/videos",
