@@ -597,13 +597,47 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
         chunks = split_transcript_into_chunks(transcript_text, max_chars=CHUNK_SIZE)
         total_chunks = len(chunks)
 
-        await _send_html(
-            context.bot, chat_id,
-            f"🧠 <b>Generating production pack in {_html(target_lang)}…</b>\n"
-            + (f"<i>Transcript split into {total_chunks} parts — all translating in parallel.</i>"
-               if total_chunks > 1 else
-               "<i>Translating transcript, writing scripts, building assets — hang tight.</i>")
+        # ── Live status message — edited in place as each step progresses ─────
+        _chunk_note = (
+            f" ({total_chunks} parts in parallel)" if total_chunks > 1 else ""
         )
+        status_msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"⏳ <b>Translating transcript{_chunk_note}…</b>",
+            parse_mode="HTML",
+        )
+
+        async def _edit_status(text: str):
+            """Silently edit the live status message; ignore stale/deleted-message errors."""
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=status_msg.message_id,
+                    text=text,
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass  # message already deleted or unchanged — not critical
+
+        # Background task: update the status message every 20 s so the user
+        # sees the bot is still alive during the long LLM call.
+        _STILL_WORKING_STEPS = [
+            "⏳ <b>Translating transcript… still going</b>\n<i>LLM is working — hang tight.</i>",
+            "⏳ <b>Building content pack…</b>\n<i>Writing titles, SEO, scripts…</i>",
+            "⏳ <b>Almost there…</b>\n<i>Finalising scripts &amp; prompt.</i>",
+        ]
+
+        async def _pulse_status():
+            for step_text in _STILL_WORKING_STEPS:
+                await asyncio.sleep(20)
+                await _edit_status(step_text)
+            # If LLM is still running after all steps, keep repeating the last one
+            while True:
+                await asyncio.sleep(20)
+                await _edit_status(_STILL_WORKING_STEPS[-1])
+
+        status_pulse = asyncio.create_task(_pulse_status())
+
         logging.info(f"STEP 1: {total_chunks} chunk(s), {len(transcript_text)} total chars. Launching parallel tasks.")
 
         async def _translate_with_retry(chunk: str, lang: str, max_retries: int = 2) -> str:
@@ -632,7 +666,19 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             for chunk in chunks
         ]
 
-        results = await asyncio.gather(pack_task, *translate_tasks)
+        try:
+            results = await asyncio.gather(pack_task, *translate_tasks)
+        finally:
+            status_pulse.cancel()
+            try:
+                await status_pulse
+            except asyncio.CancelledError:
+                pass
+
+        # Step complete — update status before sending the pack
+        await _edit_status(
+            f"✅ <b>Translation done</b> — sending production pack in <b>{_html(target_lang)}</b>…"
+        )
 
         pack_result = results[0]
         translated_parts = list(results[1:])   # one per chunk, in order
@@ -731,18 +777,17 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             from config import CHANNEL_INTRODUCTION
             intro_for_video = CHANNEL_INTRODUCTION
 
-        # Send both status messages before kicking off parallel tasks
+        # Update the live status message instead of sending extra messages
         if has_thumbnail_prompt:
-            await _send_html(
-                context.bot, chat_id,
-                f"🎨 <b>Generating thumbnail…</b>\n<i>{_html(image_prompt[:200])}</i>"
+            await _edit_status(
+                "🎨 <b>Generating thumbnail &amp; intro video…</b>\n"
+                "<i>Both are running simultaneously — usually 1–2 minutes.</i>"
             )
-        await _send_html(
-            context.bot, chat_id,
-            "🎬 <b>Generating intro video…</b>\n"
-            "<i>Thumbnail and video are generating simultaneously. "
-            "Intro video usually ready in 1–2 minutes.</i>"
-        )
+        else:
+            await _edit_status(
+                "🎬 <b>Generating intro video…</b>\n"
+                "<i>Usually ready in 1–2 minutes.</i>"
+            )
 
         async def _gen_thumbnail():
             if not has_thumbnail_prompt:
@@ -774,6 +819,9 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
 
         image_url, video_url = await asyncio.gather(_gen_thumbnail(), _gen_video())
 
+        # Mark the live status message as complete
+        await _edit_status("✅ <b>Production pack complete!</b>")
+
         # ── Save session state for per-section regeneration ───────────────────
         context.user_data['last_pack'] = {
             'transcript':    translated_transcript_raw,
@@ -802,7 +850,21 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
 
     except Exception as e:
         logging.error(f"Error in process_transcript: {e}", exc_info=True)
-        await context.bot.send_message(chat_id=chat_id, text=f"❌ An error occurred: {e}")
+        # Try to cancel the pulse task if it somehow survived (belt-and-suspenders)
+        try:
+            status_pulse.cancel()
+        except Exception:
+            pass
+        # Update the status message in place so it doesn't stay stuck at "⏳ Translating…"
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=status_msg.message_id,
+                text=f"❌ <b>An error occurred:</b> {e}",
+                parse_mode="HTML",
+            )
+        except Exception:
+            await context.bot.send_message(chat_id=chat_id, text=f"❌ An error occurred: {e}")
 
 async def regen_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle 🔄 Regenerate button presses for any individual section, thumbnail, or video."""
