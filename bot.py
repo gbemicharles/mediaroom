@@ -837,67 +837,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if url_match:
         url = url_match.group(0).rstrip('.,;:!?)')  # strip trailing punctuation
 
-        checking_msg = await context.bot.send_message(
-            chat_id=chat_id,
-            text="🔍 Checking link, please wait…"
-        )
-
-        check = await asyncio.to_thread(_check_video_url, url)
-
-        if not check['supported']:
-            err = check['error']
-            if err == 'timeout':
-                reply = (
-                    "⏱ <b>The link took too long to check.</b>\n\n"
-                    "Please try again, or send the transcript as a <code>.txt</code> file."
-                )
-            else:
-                reply = (
-                    "❌ <b>That doesn't appear to be a supported video link.</b>\n\n"
-                    "Mediaroom can fetch transcripts from YouTube, Vimeo, Dailymotion, "
-                    "and hundreds of other video platforms. If the video is valid, try "
-                    "uploading its transcript as a <code>.txt</code> file instead."
-                )
-            await context.bot.edit_message_text(
-                chat_id=chat_id, message_id=checking_msg.message_id,
-                text=reply, parse_mode="HTML"
-            )
-            return
-
-        if not check['has_captions']:
-            err = check['error']
-            if err == 'private':
-                reply = (
-                    "🔒 <b>This video is private or unavailable.</b>\n\n"
-                    "Only public videos with captions can be processed automatically.\n\n"
-                    "👉 Upload a <code>.txt</code> file with the transcript, "
-                    "or paste the script as a text message."
-                )
-            elif err == 'age_restricted':
-                reply = (
-                    "🔞 <b>This video is age-restricted.</b>\n\n"
-                    "It can't be accessed without a logged-in account.\n\n"
-                    "👉 Upload a <code>.txt</code> file with the transcript, "
-                    "or paste the script as a text message."
-                )
-            else:  # no_captions
-                reply = (
-                    "📭 <b>This video has no captions or subtitles.</b>\n\n"
-                    "Automatic transcript extraction isn't possible without captions.\n\n"
-                    "👉 Upload a <code>.txt</code> file with the transcript, "
-                    "or paste the script as a text message."
-                )
-            await context.bot.edit_message_text(
-                chat_id=chat_id, message_id=checking_msg.message_id,
-                text=reply, parse_mode="HTML"
-            )
-            return
-
-        # Valid video with captions — proceed
-        await context.bot.edit_message_text(
-            chat_id=chat_id, message_id=checking_msg.message_id,
-            text="✅ Video found with captions. Select the target language:"
-        )
+        # Skip pre-check — go straight to language picker.
+        # The fetch pipeline handles all real errors (private, age-restricted,
+        # no captions) with proper user-facing messages.
         context.user_data['pending_video_url'] = url
         context.user_data['pending_transcript'] = None
         context.user_data['pending_caption'] = ""
