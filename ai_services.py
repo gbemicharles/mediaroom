@@ -317,41 +317,108 @@ A close-up studio portrait of a 45-year-old male historian with short grey hair 
 
     return full_text, thumbnail_prompt, final_transcript
 
-def generate_thumbnail(image_prompt: str) -> str:
-    """Generate a FLUX 1.1 Pro thumbnail. Uses fal.ai if key is set, falls back to Replicate."""
+def _burn_hook_text(image_url: str, hook_text: str) -> str:
+    """Download thumbnail, burn hook text with PIL, re-upload and return new URL."""
+    import os, tempfile, requests
+    from PIL import Image, ImageDraw, ImageFont
+
+    try:
+        resp = requests.get(image_url, timeout=30)
+        resp.raise_for_status()
+
+        img_tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+        img_tmp.write(resp.content)
+        img_tmp.close()
+
+        img = Image.open(img_tmp.name).convert("RGB")
+        draw = ImageDraw.Draw(img)
+        W, H = img.size
+
+        text = hook_text.upper().strip()
+
+        FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        # Scale font so text spans ~70% of image width
+        font_size = 10
+        font = ImageFont.truetype(FONT_PATH, font_size)
+        while True:
+            bbox = draw.textbbox((0, 0), text, font=font)
+            if (bbox[2] - bbox[0]) >= W * 0.70 or font_size >= H // 3:
+                break
+            font_size += 2
+            font = ImageFont.truetype(FONT_PATH, font_size)
+
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        x = (W - tw) // 2
+        y = int(H * 0.06)
+
+        # Thick black outline
+        outline = max(3, font_size // 10)
+        for dx in range(-outline, outline + 1):
+            for dy in range(-outline, outline + 1):
+                if dx or dy:
+                    draw.text((x + dx, y + dy), text, font=font, fill=(0, 0, 0))
+        # White fill
+        draw.text((x, y), text, font=font, fill=(255, 255, 255))
+
+        out_tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+        img.save(out_tmp.name, "JPEG", quality=95)
+        out_tmp.close()
+
+        os.environ["FAL_KEY"] = FAL_API_KEY
+        new_url = fal_client.upload_file(out_tmp.name)
+
+        os.unlink(img_tmp.name)
+        os.unlink(out_tmp.name)
+        logging.info(f"Hook text '{text}' burned onto thumbnail → {new_url[:60]}")
+        return new_url
+    except Exception as e:
+        logging.error(f"PIL hook text overlay failed: {e}")
+        return image_url  # return original if overlay fails
+
+
+def generate_thumbnail(image_prompt: str, hook_text: str = "") -> str:
+    """Generate a FLUX 1.1 Pro thumbnail and burn hook text on top with PIL."""
+    import os
+    os.environ.setdefault("FAL_KEY", FAL_API_KEY or "")
+
+    image_url = ""
 
     # ── fal.ai (primary) ────────────────────────────────────────────────────
     if FAL_API_KEY:
         try:
-            import os
             os.environ["FAL_KEY"] = FAL_API_KEY
             result = fal_client.subscribe(
                 "fal-ai/flux-pro/v1.1",
                 arguments={
                     "prompt": image_prompt,
-                    "aspect_ratio": "16:9",
+                    "image_size": "landscape_16_9",
                     "output_format": "jpeg",
                     "output_quality": 100,
                     "safety_tolerance": 6,
                 },
             )
-            return result["images"][0]["url"]
+            image_url = result["images"][0]["url"]
         except Exception as e:
             logging.error(f"fal.ai thumbnail error: {e}")
 
     # ── Replicate (fallback) ─────────────────────────────────────────────────
-    if REPLICATE_API_TOKEN:
+    if not image_url and REPLICATE_API_TOKEN:
         try:
             output = replicate.run(
                 "black-forest-labs/flux-1.1-pro",
                 input={"prompt": image_prompt, "aspect_ratio": "16:9", "output_format": "jpg"},
             )
             result = output[0] if isinstance(output, list) else output
-            return str(result.url) if hasattr(result, "url") else str(result)
+            image_url = str(result.url) if hasattr(result, "url") else str(result)
         except Exception as e:
             logging.error(f"Replicate thumbnail error: {e}")
 
-    return ""
+    # ── Burn hook text on top with PIL ───────────────────────────────────────
+    if image_url and hook_text and FAL_API_KEY:
+        image_url = _burn_hook_text(image_url, hook_text)
+
+    return image_url
 
 
 def generate_intro_video(intro_text: str, target_lang: str) -> str:

@@ -589,6 +589,19 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
         full_text, image_prompt, pack_transcript = pack_result
         logging.info(f"STEP 2: pack={len(full_text)} chars, {len(translated_parts)} translated chunks")
 
+        # Extract thumbnail hook text (STEP 1 of thumbnail section — 2-4 ALL CAPS words)
+        hook_text = ""
+        hook_match = re.search(
+            r'STEP\s+1[^\n]*\n\s*\n?\s*([^\n\-#]{3,60})',
+            full_text, re.IGNORECASE
+        )
+        if hook_match:
+            candidate = hook_match.group(1).strip()
+            # Accept only if short (≤6 words) — avoid grabbing a paragraph
+            if len(candidate.split()) <= 6:
+                hook_text = candidate
+        logging.info(f"Hook text extracted: {hook_text!r}")
+
         # Combine raw Haiku translations, then split into ≤999-char paragraphs
         translated_transcript_raw = "\n\n".join(p for p in translated_parts if p.strip())
         paragraphs = split_into_paragraphs(translated_transcript_raw, min_chars=500, max_chars=999)
@@ -650,9 +663,16 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
                 if not body.strip():
                     continue
                 if header and _is_code_block_section(header):
-                    # Plain-escape only (no markdown→HTML) so <code> stays valid
-                    safe_body = body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                    msg = f"<b>{_html(header)}</b>\n{'─' * 20}\n<code>{safe_body}</code>"
+                    # Only wrap STAGE 1 (target language) in <code>; STAGE 2 (Russian) stays plain
+                    stage2 = re.search(r'\nSTAGE\s+2', body, re.IGNORECASE)
+                    if stage2:
+                        stage1_text = body[:stage2.start()].strip()
+                        stage2_text = body[stage2.start():].strip()
+                        safe1 = stage1_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                        msg = f"<b>{_html(header)}</b>\n{'─' * 20}\n<code>{safe1}</code>\n\n{_html(stage2_text)}"
+                    else:
+                        safe_body = body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                        msg = f"<b>{_html(header)}</b>\n{'─' * 20}\n<code>{safe_body}</code>"
                 else:
                     msg = (f"<b>{_html(header)}</b>\n{'─' * 20}\n{_html(body)}" if header
                            else _html(body))
@@ -669,7 +689,7 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
                 f"🎨 <b>Generating thumbnail…</b>\n<i>{_html(image_prompt[:200])}</i>"
             )
             logging.info("STEP 6: Calling FLUX Schnell")
-            image_url = await asyncio.to_thread(generate_thumbnail, image_prompt)
+            image_url = await asyncio.to_thread(generate_thumbnail, image_prompt, hook_text)
             logging.info(f"STEP 7: Thumbnail URL: {image_url[:80] if image_url else 'EMPTY'}")
 
             if image_url:
