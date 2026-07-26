@@ -727,7 +727,11 @@ async def process_transcript(context: ContextTypes.DEFAULT_TYPE, chat_id: int, u
             from config import CHANNEL_INTRODUCTION
             intro_for_video = CHANNEL_INTRODUCTION
 
-        await _send_html(context.bot, chat_id, "🎬 <b>Generating intro video…</b> <i>(~60–90 s)</i>")
+        await _send_html(
+            context.bot, chat_id,
+            "🎬 <b>Generating intro video…</b>\n"
+            "<i>This takes 5–8 minutes (AI animation + lip sync). Please wait — you'll receive the video automatically when it's ready.</i>"
+        )
         logging.info("STEP 8: Calling talking-head lip-sync video generation")
         video_url = await asyncio.to_thread(generate_intro_video, intro_for_video, target_lang)
         logging.info(f"STEP 9: Video URL: {video_url[:80] if video_url else 'EMPTY'}")
