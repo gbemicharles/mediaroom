@@ -751,15 +751,146 @@ def _is_meaningful_transcript(text: str) -> bool:
     return word_count >= 40
 
 
+def _is_youtube_url(url: str) -> bool:
+    return bool(re.search(r'(youtube\.com|youtu\.be)', url, re.IGNORECASE))
+
+
+def _check_video_url(url: str) -> dict:
+    """Probe url with yt-dlp --list-subs (no download) to decide if it is a
+    supported video that has captions available.
+
+    Returns a dict:
+      supported   bool  – yt-dlp recognises the site / video
+      has_captions bool – at least one caption/subtitle track exists
+      error       str  – 'private' | 'age_restricted' | 'no_captions' |
+                         'unsupported' | 'timeout' | '' (success)
+    """
+    proxy = None
+    if WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD:
+        proxy = f"http://{WEBSHARE_PROXY_USERNAME}:{WEBSHARE_PROXY_PASSWORD}@p.webshare.io:80"
+
+    cmd = [
+        "yt-dlp",
+        "--list-subs",
+        "--skip-download",
+        "--no-warnings",
+        "--impersonate", "Chrome-136",
+    ]
+    if proxy:
+        cmd += ["--proxy", proxy]
+    cmd.append(url)
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+    except subprocess.TimeoutExpired:
+        return {'supported': False, 'has_captions': False, 'error': 'timeout'}
+
+    output = (result.stdout or "") + "\n" + (result.stderr or "")
+    low = output.lower()
+
+    # Hard errors — video exists on the platform but can't be used
+    if any(p in low for p in ("private video", "this video is private",
+                               "video is unavailable", "has been removed",
+                               "account associated with this video")):
+        return {'supported': True, 'has_captions': False, 'error': 'private'}
+
+    if any(p in low for p in ("sign in to confirm your age", "age-restricted",
+                               "age_verification", "inappropriate for some users")):
+        return {'supported': True, 'has_captions': False, 'error': 'age_restricted'}
+
+    # Unsupported / unrecognised URL
+    if "unsupported url" in low or "is not a valid url" in low:
+        return {'supported': False, 'has_captions': False, 'error': 'unsupported'}
+
+    # Generic error with no caption info at all → treat as unsupported
+    if result.returncode != 0 and "error" in low and "subtitle" not in low and "caption" not in low:
+        return {'supported': False, 'has_captions': False, 'error': 'unsupported'}
+
+    # Explicit "no captions"
+    if any(p in low for p in ("has no subtitles", "no subtitles", "no automatic captions",
+                               "subtitles not available", "does not have captions")):
+        return {'supported': True, 'has_captions': False, 'error': 'no_captions'}
+
+    # Captions found
+    if any(p in low for p in ("available subtitles", "available automatic captions",
+                               "language  formats", "language formats")):
+        return {'supported': True, 'has_captions': True, 'error': ''}
+
+    # Ambiguous output but no error — let the main fetch attempt it
+    return {'supported': True, 'has_captions': True, 'error': ''}
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
     text = update.message.text or ""
 
-    # 1. YouTube link?
-    video_id = extract_video_id(text)
-    if video_id:
-        context.user_data['pending_video_url'] = text
+    # 1. Does the message contain any URL?
+    url_match = re.search(r'https?://\S+', text)
+    if url_match:
+        url = url_match.group(0).rstrip('.,;:!?)')  # strip trailing punctuation
+
+        checking_msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text="🔍 Checking link, please wait…"
+        )
+
+        check = await asyncio.to_thread(_check_video_url, url)
+
+        if not check['supported']:
+            err = check['error']
+            if err == 'timeout':
+                reply = (
+                    "⏱ <b>The link took too long to check.</b>\n\n"
+                    "Please try again, or send the transcript as a <code>.txt</code> file."
+                )
+            else:
+                reply = (
+                    "❌ <b>That doesn't appear to be a supported video link.</b>\n\n"
+                    "Mediaroom can fetch transcripts from YouTube, Vimeo, Dailymotion, "
+                    "and hundreds of other video platforms. If the video is valid, try "
+                    "uploading its transcript as a <code>.txt</code> file instead."
+                )
+            await context.bot.edit_message_text(
+                chat_id=chat_id, message_id=checking_msg.message_id,
+                text=reply, parse_mode="HTML"
+            )
+            return
+
+        if not check['has_captions']:
+            err = check['error']
+            if err == 'private':
+                reply = (
+                    "🔒 <b>This video is private or unavailable.</b>\n\n"
+                    "Only public videos with captions can be processed automatically.\n\n"
+                    "👉 Upload a <code>.txt</code> file with the transcript, "
+                    "or paste the script as a text message."
+                )
+            elif err == 'age_restricted':
+                reply = (
+                    "🔞 <b>This video is age-restricted.</b>\n\n"
+                    "It can't be accessed without a logged-in account.\n\n"
+                    "👉 Upload a <code>.txt</code> file with the transcript, "
+                    "or paste the script as a text message."
+                )
+            else:  # no_captions
+                reply = (
+                    "📭 <b>This video has no captions or subtitles.</b>\n\n"
+                    "Automatic transcript extraction isn't possible without captions.\n\n"
+                    "👉 Upload a <code>.txt</code> file with the transcript, "
+                    "or paste the script as a text message."
+                )
+            await context.bot.edit_message_text(
+                chat_id=chat_id, message_id=checking_msg.message_id,
+                text=reply, parse_mode="HTML"
+            )
+            return
+
+        # Valid video with captions — proceed
+        await context.bot.edit_message_text(
+            chat_id=chat_id, message_id=checking_msg.message_id,
+            text="✅ Video found with captions. Select the target language:"
+        )
+        context.user_data['pending_video_url'] = url
         context.user_data['pending_transcript'] = None
         context.user_data['pending_caption'] = ""
         await context.bot.send_message(
@@ -769,22 +900,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # 2. Looks like some other URL (not YouTube)?
-    if re.search(r'https?://', text):
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=(
-                "❌ That doesn't look like a YouTube link.\n\n"
-                "Please send:\n"
-                "• A <b>YouTube URL</b> (e.g. <code>https://youtu.be/...</code>)\n"
-                "• A <b>.txt file</b> with your transcript\n"
-                "• A <b>full transcript</b> pasted as text (at least 40 words)"
-            ),
-            parse_mode="HTML"
-        )
-        return
-
-    # 3. Meaningful transcript text?
+    # 2. Meaningful transcript pasted as plain text?
     if _is_meaningful_transcript(text):
         context.user_data['pending_video_url'] = None
         context.user_data['pending_transcript'] = text
@@ -796,14 +912,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # 4. Too short / meaningless
+    # 3. Too short / meaningless
     word_count = len(text.strip().split())
     await context.bot.send_message(
         chat_id=chat_id,
         text=(
             f"❌ That message is too short to process ({word_count} word{'s' if word_count != 1 else ''}).\n\n"
             "<b>Mediaroom</b> accepts:\n"
-            "• A <b>YouTube URL</b> — I'll fetch the transcript automatically\n"
+            "• A <b>video link</b> (YouTube, Vimeo, Dailymotion, and many more)\n"
             "• A <b>.txt file</b> — attach your transcript as a file\n"
             "• A <b>full transcript</b> pasted as text — at least 40 words"
         ),
@@ -835,27 +951,36 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['pending_caption'] = None
     
     if video_url:
-        await context.bot.send_message(chat_id=chat_id, text="📥 Detected YouTube link. Fetching transcript — this can take up to 60 seconds, please wait…")
+        is_yt = _is_youtube_url(video_url)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="📥 Fetching transcript — this can take up to 60 seconds, please wait…"
+        )
 
         def _fetch_transcript():
-            """Try all download methods sequentially (runs in a thread).
+            """Try download methods sequentially (runs in a thread).
             Hard errors (no subtitles, age-restricted, private) are propagated
-            immediately — no point trying other methods for those cases."""
-            # Priority queue for the most informative non-transient error seen so far
-            hard_error = None  # NoSubtitlesError / AgeRestrictedError / PrivateVideoError
-            rate_error = None  # RateLimitedError
+            immediately. YouTube-specific fallbacks are skipped for non-YouTube URLs."""
+            rate_error = None
 
             try:
                 return download_transcript_ytdlp(video_url)
             except (NoSubtitlesError, AgeRestrictedError, PrivateVideoError) as e:
                 logging.info(f"yt-dlp hard error (not retrying): {e}")
-                raise  # no point trying other methods
+                raise
             except RateLimitedError as e:
                 rate_error = e
-                logging.info(f"yt-dlp rate-limited: {e}. Trying direct fetch...")
+                logging.info(f"yt-dlp rate-limited: {e}.")
+                if not is_yt:
+                    raise rate_error
+                logging.info("Trying direct fetch...")
             except Exception as e1:
-                logging.info(f"yt-dlp failed: {e1}. Trying direct fetch...")
+                logging.info(f"yt-dlp failed: {e1}.")
+                if not is_yt:
+                    raise
+                logging.info("Trying direct fetch...")
 
+            # YouTube-only fallbacks
             try:
                 return download_transcript_direct(video_url)
             except (NoSubtitlesError, AgeRestrictedError, PrivateVideoError) as e:
@@ -889,7 +1014,6 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e4:
                 logging.error(f"All transcript downloaders failed: {e4}")
 
-            # All methods exhausted — raise the most informative error
             if rate_error:
                 raise rate_error
             return None
