@@ -178,57 +178,82 @@ The result should look like a premium Netflix historical documentary portrait.
 
 # 8. THUMBNAIL PROMPT
 
-Write a complete English prompt for AI image generation.
-The prompt must create an ultra-realistic cinematic YouTube thumbnail optimized for maximum CTR.
-Always follow these rules:
-• one dominant historical subject occupying about 50–70% of the frame
-• maximum three important visual elements
-• cinematic composition
-• visually clean
-• historically accurate
-• premium historical realism
-• mysterious but peaceful atmosphere
-• Apple-level minimalism
-• Netflix documentary quality
-• BBC documentary quality
-• ultra realistic
-• photorealistic
-• premium cinematic lighting
-• high-end color grading
+This is the MOST IMPORTANT section in the entire workflow.
+The thumbnail is the only thing that determines whether someone clicks.
+A weak thumbnail kills the video. A great thumbnail makes it go viral.
 
-Include an elegant title directly inside the thumbnail.
-Rules for text:
-• target language
-• premium serif font
-• positioned in the UPPER LEFT
-• maximum 30% of image width
-• one large title
-• one smaller subtitle
-The subtitle should complement the title.
+--------------------------------------------------
 
-Leave the LOWER LEFT CORNER completely empty for the channel branding badge.
-Never place:
-• text
-• faces
-• important objects
-• lighting effects
-inside that area.
+STEP 1 — Write the thumbnail hook text (2–5 words, target language, ALL CAPS).
 
-Avoid:
-• fantasy
-• anime
-• cartoon
-• CGI look
-• modern objects
-• modern architecture
-• logos
-• watermarks
-• clutter
+Think like a tabloid. Create shock, urgency, or irresistible curiosity.
+The hook must trigger an emotional reaction in under one second.
+Strong hooks use patterns like:
+• revelation: "THEY HID THIS FOR YEARS"
+• shock: "NOBODY SURVIVED"
+• curiosity gap: "WHAT REALLY HAPPENED"
+• scale: "THE LARGEST IN HISTORY"
+• forbidden knowledge: "THE SECRET THEY BURIED"
+
+The hook MUST be distilled from the winning title — not random, not generic.
+Write it in the target language. All caps. Maximum 5 words.
+
+--------------------------------------------------
+
+STEP 2 — Write the full FLUX image generation prompt in English.
+
+The image must STOP THE SCROLL. Not polished. Not calm. POWERFUL.
+
+SUBJECT — one dominant subject filling 60–80% of the frame:
+• A face showing raw emotion — awe, fear, determination, or grief
+• A dramatic historical scene or object charged with meaning
+• Something that makes the viewer ask "what is this?"
+• The subject must feel SIGNIFICANT, DANGEROUS, or FORBIDDEN
+
+LIGHTING — this determines whether the image looks cheap or cinematic:
+• Ultra-dramatic chiaroscuro — deep blacks against intense highlights
+• Volumetric light rays, fire glow, torch light, or cold moonlight
+• The light must create TENSION — never flat, never even
+
+COLOR — saturated, bold, and contrasted:
+• Deep blacks, burning golds, blood reds, or cold desolate blues
+• Never pastels, never beige, never washed-out
+• Think Gladiator, Oppenheimer, Dune — dark, rich, intentional
+
+COMPOSITION — designed to be read at 200×112 pixels:
+• One focal point. Everything else serves it.
+• No clutter. No equal-weight elements competing for attention.
+
+TEXT IN THE IMAGE:
+• Embed the hook text directly in the image as part of the composition
+• Bold, thick condensed all-caps font — white, gold, or red
+• Heavy black drop-shadow or dark outline so it reads on any background
+• Positioned in the upper-center or upper-left — large enough to read at thumbnail size
+• The text must feel burned into the scene, not pasted on top
+
+TECHNICAL:
+• Ultra-realistic, photographic, RAW photo aesthetic
+• Shot on high-end cinema camera — ARRI, RED, or Leica
+• Shallow depth of field — sharp subject, atmospheric blurred background
+• 16:9 aspect ratio
+
+KEEP THE LOWER LEFT CORNER EMPTY — reserved for the channel logo badge.
+
+STRICTLY AVOID:
+• Peaceful, calm, or relaxing mood
+• Anime, cartoon, CGI, or illustrated look
+• Fantasy elements (unless topic demands it)
+• Soft or pastel color palette
+• Modern objects when topic is historical
+• Watermarks, logos, borders
+• Cluttered or busy compositions
+
+--------------------------------------------------
 
 CRITICAL INSTRUCTION: You must wrap the final English prompt for AI image generation inside <thumbnail_prompt>...</thumbnail_prompt> tags inside Section 8.
 For example:
 # 8. THUMBNAIL PROMPT
-<thumbnail_prompt>A premium, cinematic, ultra-realistic photo of...</thumbnail_prompt>
+<thumbnail_prompt>Dramatic cinematic RAW photo of...</thumbnail_prompt>
 """
 
 def check_env_vars():

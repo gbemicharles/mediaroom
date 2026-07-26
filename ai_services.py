@@ -299,6 +299,8 @@ def generate_thumbnail(image_prompt: str) -> str:
                     "prompt": image_prompt,
                     "aspect_ratio": "16:9",
                     "output_format": "jpeg",
+                    "output_quality": 100,
+                    "safety_tolerance": 6,
                 },
             )
             return result["images"][0]["url"]
