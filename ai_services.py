@@ -317,44 +317,69 @@ A close-up studio portrait of a 45-year-old male historian with short grey hair 
 
     return full_text, thumbnail_prompt, final_transcript
 
+def _pick_font_path(text: str) -> str:
+    """Return best available font path for the given text's script."""
+    import os
+    BASE = os.path.dirname(os.path.abspath(__file__))
+
+    def _has(path): return os.path.exists(path)
+
+    # Detect script by Unicode range
+    has_cjk      = any('\u4e00' <= c <= '\u9fff' or '\u3040' <= c <= '\u30ff' for c in text)
+    has_cyrillic = any('\u0400' <= c <= '\u04ff' for c in text)
+
+    cjk_font  = os.path.join(BASE, "fonts", "NotoSansCJK.otf")
+    noto_font = os.path.join(BASE, "fonts", "NotoSans.ttf")
+    bebas     = os.path.join(BASE, "fonts", "BebasNeue.ttf")
+    dejavu    = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+    if has_cjk and _has(cjk_font):
+        return cjk_font
+    if has_cyrillic and _has(noto_font):
+        return noto_font
+    if _has(bebas):
+        return bebas          # Bebas Neue — condensed, cinematic, all-caps
+    if _has(noto_font):
+        return noto_font
+    return dejavu             # system fallback
+
+
 def _burn_hook_text(image_url: str, hook_text: str) -> str:
-    """Download thumbnail, burn title text (word-wrapped, 1-2 lines) with PIL, re-upload."""
-    import os, tempfile, requests, textwrap
+    """Download thumbnail, burn cinematic gold title text with PIL, re-upload.
+
+    Style matches premium YouTube thumbnails:
+    • Bebas Neue / Noto font (script-aware)
+    • Gold fill (#FFD700) with deep drop shadow — no dark bar
+    • Large, upper-center placement
+    """
+    import os, tempfile, requests
     from PIL import Image, ImageDraw, ImageFont
 
-    FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    TARGET_WIDTH_RATIO = 0.88   # lines should span up to 88% of image width
-    MAX_FONT_SIZE      = 999    # will be capped by H//4 per line
+    TARGET_WIDTH_RATIO = 0.86   # text spans up to 86 % of width
 
-    def _best_wrap(draw, text: str, W: int, H: int):
-        """Return (lines, font) that maximises font size within 2 lines and width budget."""
+    def _best_wrap(draw, text: str, W: int, H: int, font_path: str):
         words = text.split()
-        best = (None, None, 0)          # (lines, font, font_size)
-
-        # Try 1-line, then optimal 2-line split
+        best  = (None, None, 0)          # (lines, font, font_size)
         candidates = [" ".join(words)]
         for split in range(1, len(words)):
             candidates.append(" ".join(words[:split]) + "\n" + " ".join(words[split:]))
-
         for candidate in candidates:
             lines = candidate.split("\n")
             if len(lines) > 2:
                 continue
-            # Binary-search best font size for this wrapping
-            lo, hi = 10, min(MAX_FONT_SIZE, H // (3 * len(lines)))
-            chosen_size = lo
+            # Allow generous size: H//2 for 1 line, H//3 per line for 2 lines
+            max_size = H // (2 if len(lines) == 1 else 3)
+            lo, hi, chosen_size = 10, max_size, 10
             while lo <= hi:
                 mid = (lo + hi) // 2
-                f = ImageFont.truetype(FONT_PATH, mid)
+                f   = ImageFont.truetype(font_path, mid)
                 max_w = max(draw.textbbox((0, 0), l, font=f)[2] for l in lines)
                 if max_w <= W * TARGET_WIDTH_RATIO:
-                    chosen_size = mid
-                    lo = mid + 1
+                    chosen_size = mid; lo = mid + 1
                 else:
                     hi = mid - 1
             if chosen_size > best[2]:
-                best = (lines, ImageFont.truetype(FONT_PATH, chosen_size), chosen_size)
-
+                best = (lines, ImageFont.truetype(font_path, chosen_size), chosen_size)
         return best[0], best[1], best[2]
 
     try:
@@ -365,49 +390,49 @@ def _burn_hook_text(image_url: str, hook_text: str) -> str:
         img_tmp.write(resp.content)
         img_tmp.close()
 
-        img = Image.open(img_tmp.name).convert("RGB")
+        img  = Image.open(img_tmp.name).convert("RGB")
         draw = ImageDraw.Draw(img)
         W, H = img.size
 
-        text = hook_text.upper().strip()
-        lines, font, font_size = _best_wrap(draw, text, W, H)
+        text      = hook_text.upper().strip()
+        font_path = _pick_font_path(text)
+        lines, font, font_size = _best_wrap(draw, text, W, H, font_path)
         if not lines or not font:
             logging.warning("_burn_hook_text: could not fit text, returning original")
             return image_url
 
-        # Measure total block height
-        line_bboxes = [draw.textbbox((0, 0), l, font=font) for l in lines]
+        # Measure block
+        line_bboxes  = [draw.textbbox((0, 0), l, font=font) for l in lines]
         line_heights = [bb[3] - bb[1] for bb in line_bboxes]
         line_widths  = [bb[2] - bb[0] for bb in line_bboxes]
-        gap          = max(4, font_size // 8)
+        gap          = max(6, font_size // 10)
         block_h      = sum(line_heights) + gap * (len(lines) - 1)
 
-        # Position: bottom quarter of the image (more cinematic, less obtrusive)
-        pad     = int(H * 0.04)
-        y_start = H - block_h - pad
-        outline = max(2, font_size // 14)   # thinner outline — more elegant
+        # ── Position: upper-centre (15 % from top) ───────────────────────────
+        y_start       = int(H * 0.12)
+        shadow_offset = max(5, font_size // 16)
+        glow_r        = max(2, font_size // 35)
 
-        # Draw a subtle semi-transparent dark bar behind the text
-        from PIL import Image as _PIL_Image
-        bar_y0 = y_start - pad
-        bar_y1 = y_start + block_h + pad
-        overlay = _PIL_Image.new("RGBA", img.size, (0, 0, 0, 0))
-        from PIL import ImageDraw as _ImageDraw
-        ov_draw = _ImageDraw.Draw(overlay)
-        ov_draw.rectangle([(0, bar_y0), (W, bar_y1)], fill=(0, 0, 0, 140))
-        img = _PIL_Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
-        draw = ImageDraw.Draw(img)
+        GOLD        = (255, 215,   0)   # #FFD700
+        DARK_AMBER  = (140,  80,   0)   # warm glow halo
+        BLACK       = (  0,   0,   0)
 
         for i, line in enumerate(lines):
             x = (W - line_widths[i]) // 2
             y = y_start + sum(line_heights[:i]) + gap * i
-            # Thin black outline
-            for dx in range(-outline, outline + 1):
-                for dy in range(-outline, outline + 1):
+
+            # 1. Deep drop shadow (stacked, bottom-right)
+            for s in range(shadow_offset, 0, -1):
+                draw.text((x + s, y + s), line, font=font, fill=BLACK)
+
+            # 2. Warm amber glow halo around the text
+            for dx in range(-glow_r, glow_r + 1):
+                for dy in range(-glow_r, glow_r + 1):
                     if dx or dy:
-                        draw.text((x + dx, y + dy), line, font=font, fill=(0, 0, 0))
-            # White fill
-            draw.text((x, y), line, font=font, fill=(255, 255, 255))
+                        draw.text((x + dx, y + dy), line, font=font, fill=DARK_AMBER)
+
+            # 3. Gold fill on top
+            draw.text((x, y), line, font=font, fill=GOLD)
 
         out_tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
         img.save(out_tmp.name, "JPEG", quality=95)
@@ -418,7 +443,8 @@ def _burn_hook_text(image_url: str, hook_text: str) -> str:
 
         os.unlink(img_tmp.name)
         os.unlink(out_tmp.name)
-        logging.info(f"Title '{text[:60]}' burned onto thumbnail ({font_size}px, {len(lines)} line(s))")
+        font_name = os.path.basename(font_path)
+        logging.info(f"Title '{text[:60]}' burned ({font_size}px {font_name}, gold, {len(lines)} line(s))")
         return new_url
     except Exception as e:
         logging.error(f"PIL title overlay failed: {e}")
@@ -430,6 +456,16 @@ def generate_thumbnail(image_prompt: str, hook_text: str = "") -> str:
     import os
     os.environ.setdefault("FAL_KEY", FAL_API_KEY or "")
 
+    # Reinforce the title in the FLUX prompt so it shapes the composition
+    # even when FLUX doesn't render text perfectly — the scene will leave space for it
+    flux_prompt = image_prompt
+    if hook_text:
+        flux_prompt = (
+            f"{image_prompt.rstrip('. ')}. "
+            f"The words \"{hook_text.upper()}\" appear in large bold gold cinematic lettering "
+            f"integrated into the upper portion of the image, styled like a premium documentary title card."
+        )
+
     image_url = ""
 
     # ── fal.ai (primary) ────────────────────────────────────────────────────
@@ -439,7 +475,7 @@ def generate_thumbnail(image_prompt: str, hook_text: str = "") -> str:
             result = fal_client.subscribe(
                 "fal-ai/flux-pro/v1.1",
                 arguments={
-                    "prompt": image_prompt,
+                    "prompt": flux_prompt,
                     "image_size": "landscape_16_9",
                     "output_format": "jpeg",
                     "output_quality": 100,
